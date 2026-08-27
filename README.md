@@ -8,6 +8,7 @@ El plan de proyecto completo, con historias de usuario, requisitos y arquitectur
 
 ```
 SubastaLive/
+├── .github/workflows/   Pipelines CI/CD (build → ECR → deploy ECS), uno por microservicio
 ├── frontend/        SPA — login dual Cognito / Entra ID
 ├── ms-usuarios/     Microservicio — perfil de dominio del usuario           (SIN IMPLEMENTAR — solo contrato)
 ├── ms-catalogo/     Microservicio — lotes, subastas y estados               (SIN IMPLEMENTAR — solo contrato)
@@ -155,6 +156,83 @@ en la misma red que la base de datos.
 docker compose down       # detiene todo, conserva los datos
 docker compose down -v    # detiene todo y borra el volumen (reinicia la base desde cero)
 ```
+
+## CI/CD — despliegue automático a AWS (GitHub Actions)
+
+Cada microservicio tiene su propio workflow en [`.github/workflows/`](.github/workflows/)
+(`deploy-ms-usuarios.yml`, `deploy-ms-catalogo.yml`, `deploy-ms-pujas.yml`). Al hacer push a `main` que toque
+archivos dentro de la carpeta de un microservicio (o disparándolo a mano desde la pestaña **Actions** de
+GitHub), el workflow:
+
+1. Construye la imagen Docker del servicio (`docker build ./ms-x`).
+2. La sube a **Amazon ECR**, con dos tags: el SHA del commit (trazabilidad/rollback) y `latest`.
+3. Ejecuta `aws ecs update-service --force-new-deployment` sobre el servicio de **ECS** correspondiente, que
+   vuelve a desplegar la tarea tirando la imagen `latest` recién publicada.
+
+Cada workflow solo se activa por cambios en su propia carpeta (`ms-usuarios/**`, etc.), así que los tres
+servicios se despliegan de forma independiente entre sí, consistente con que cada uno escala y se despliega
+por separado (RNF-01).
+
+**Importante:** el workflow asume que ya existe un `Dockerfile` en la carpeta del microservicio. Hasta que
+alguien lo agregue, el workflow existe pero fallará si se dispara (no hay nada que construir) — es
+intencional, queda listo para activarse solo cuando el servicio tenga código.
+
+### Prerrequisitos de infraestructura (manuales, una sola vez por microservicio)
+
+Antes de que el pipeline pueda desplegar algo, debe existir en AWS:
+
+1. **Un repositorio en Amazon ECR** por microservicio (ej. `subastalive/ms-usuarios`, `subastalive/ms-catalogo`, `subastalive/ms-pujas`).
+2. **Un cluster de ECS** (puede ser uno solo, compartido por los tres servicios) y, dentro de él, **una task definition + un service de ECS por microservicio**, con el contenedor de la task definition apuntando a `<ECR_REGISTRY>/<repositorio>:latest` — el workflow no crea ni actualiza la task definition, solo fuerza a ECS a re-halar la imagen `latest`.
+3. Un **Application Load Balancer** y su target group asociados al service de ECS (para que el API Gateway pueda enrutar hacia él), según la sección 5.1 del plan.
+
+### Secrets y Variables que hay que configurar en GitHub
+
+En el repositorio de GitHub: **Settings → Secrets and variables → Actions**. Los valores sensibles van en la
+pestaña **Secrets**; los que no son sensibles (nombres, región) van en la pestaña **Variables**, para poder
+leerlos sin exponerlos como secretos innecesariamente.
+
+| Nombre | Tipo | Valor |
+|---|---|---|
+| `AWS_ACCESS_KEY_ID` | Secret | Access key de la sesión del laboratorio (AWS Academy / Canvas) |
+| `AWS_SECRET_ACCESS_KEY` | Secret | Secret key de la misma sesión |
+| `AWS_SESSION_TOKEN` | Secret | Session token de la misma sesión — los laboratorios tipo AWS Academy entregan credenciales **temporales** de las tres, no solo access/secret key |
+| `AWS_REGION` | Variable | Región donde está la infraestructura (ej. `us-east-1`) |
+| `ECR_REPOSITORY_USUARIOS` | Variable | Nombre del repositorio ECR de `ms-usuarios` |
+| `ECR_REPOSITORY_CATALOGO` | Variable | Nombre del repositorio ECR de `ms-catalogo` |
+| `ECR_REPOSITORY_PUJAS` | Variable | Nombre del repositorio ECR de `ms-pujas` |
+| `ECS_CLUSTER` | Variable | Nombre del cluster de ECS |
+| `ECS_SERVICE_USUARIOS` | Variable | Nombre del service de ECS de `ms-usuarios` |
+| `ECS_SERVICE_CATALOGO` | Variable | Nombre del service de ECS de `ms-catalogo` |
+| `ECS_SERVICE_PUJAS` | Variable | Nombre del service de ECS de `ms-pujas` |
+
+El registro de ECR (`ECR_REGISTRY`, con forma `<id-de-cuenta>.dkr.ecr.<region>.amazonaws.com`) no se configura
+a mano: la acción `aws-actions/amazon-ecr-login` lo resuelve automáticamente a partir de las credenciales.
+
+### ⚠️ Es un laboratorio (AWS Academy / Canvas): las credenciales expiran
+
+Como toda la infraestructura se levanta desde un **laboratorio de Canvas (AWS Academy Learner Lab)**, las
+credenciales (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`) son **temporales** y caducan
+cuando termina la sesión del laboratorio (normalmente unas pocas horas). Cada vez que se reinicie el
+laboratorio:
+
+1. Abrir el panel **AWS Details** del laboratorio en Canvas y copiar el nuevo Access Key ID, Secret Access
+   Key y Session Token.
+2. Actualizar esos tres valores en **Settings → Secrets and variables → Actions → Secrets** del repositorio
+   (sobrescribir los que ya existen, GitHub no permite verlos, solo reemplazarlos).
+3. Si el laboratorio genera una cuenta de AWS nueva (cambia el ID de cuenta), los repositorios ECR y el
+   cluster/servicios de ECS también quedan en una cuenta nueva — hay que recrearlos y, si cambiaron de
+   nombre, actualizar las Variables de la tabla de arriba.
+
+Si no se actualizan estas credenciales antes de hacer push, el workflow falla en el paso "Configurar
+credenciales AWS" con un error de autenticación — es la causa más común de que el pipeline deje de funcionar
+de un día para otro en este tipo de laboratorio.
+
+### Disparar un despliegue
+
+- **Automático:** `git push` a `main` con cambios dentro de `ms-usuarios/`, `ms-catalogo/` o `ms-pujas/`.
+- **Manual:** pestaña **Actions** del repositorio → elegir el workflow del servicio → **Run workflow**.
+- **Seguimiento:** pestaña **Actions** para ver el log del pipeline; consola de ECS (o CloudWatch Logs de la
+  task definition) para ver si el contenedor nuevo levantó bien.
 
 ## Cómo levantar cada parte
 

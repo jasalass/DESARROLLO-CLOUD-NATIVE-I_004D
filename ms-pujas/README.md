@@ -192,3 +192,6 @@ etapa es síncrona vía HTTP.**
 - [ ] Cliente HTTP hacia `ms-catalogo` (`/subastas/{id}/reglas`) para validar estado antes de aceptar la puja.
 - [ ] Exponer `/health`.
 - [ ] Dockerfile para el `docker-compose.yml` de la raíz.
+- [ ] Repositorio ECR + cluster/service de ECS creados (ver README principal, sección CI/CD) — el pipeline
+      [`../.github/workflows/deploy-ms-pujas.yml`](../.github/workflows/deploy-ms-pujas.yml) ya existe
+      y se activa solo al hacer push a esta carpeta.

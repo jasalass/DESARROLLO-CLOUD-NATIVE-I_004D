@@ -1,0 +1,65 @@
+# Build + push a ECR + despliegue en ECS para ms-usuarios.
+#
+# Se activa con push a main que toque algo dentro de ms-usuarios/ (o manualmente desde la pestaña Actions).
+# Requiere que ms-usuarios/Dockerfile exista — mientras no exista, este workflow fallará al ejecutarse
+# (es intencional: se activa recién cuando el servicio tenga código y su propio Dockerfile).
+#
+# Prerrequisitos de infraestructura (manuales, una sola vez) y la lista completa de Secrets/Variables
+# necesarios están documentados en el README principal, sección "CI/CD — despliegue automático a AWS".
+
+name: Deploy ms-usuarios
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ms-usuarios/**"
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-ms-usuarios-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY_USUARIOS }}
+  ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+  ECS_SERVICE: ${{ vars.ECS_SERVICE_USUARIOS }}
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar credenciales AWS (laboratorio AWS Academy — ver README)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login a Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag y push de la imagen a ECR
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build \
+            -t "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
+            -t "$ECR_REGISTRY/$ECR_REPOSITORY:latest" \
+            ./ms-usuarios
+          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:latest"
+
+      - name: Forzar nuevo despliegue en ECS
+        run: |
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --force-new-deployment

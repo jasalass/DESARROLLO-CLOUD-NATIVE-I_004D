@@ -160,3 +160,6 @@ servicios en esta etapa es síncrona vía HTTP.**
 - [ ] Cliente HTTP hacia `ms-pujas` para `GET /usuarios/{sub}/historial`.
 - [ ] Exponer `/health` para verificación de despliegue.
 - [ ] Dockerfile para poder correrlo en el `docker-compose.yml` de la raíz del repo.
+- [ ] Repositorio ECR + cluster/service de ECS creados (ver README principal, sección CI/CD) — el pipeline
+      [`../.github/workflows/deploy-ms-usuarios.yml`](../.github/workflows/deploy-ms-usuarios.yml) ya existe
+      y se activa solo al hacer push a esta carpeta.

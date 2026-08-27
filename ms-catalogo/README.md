@@ -249,3 +249,6 @@ etapa es síncrona vía HTTP.**
 - [ ] Cliente HTTP hacia `ms-pujas` para enriquecer `GET /subastas/{id}`.
 - [ ] Exponer `/health`.
 - [ ] Dockerfile para el `docker-compose.yml` de la raíz.
+- [ ] Repositorio ECR + cluster/service de ECS creados (ver README principal, sección CI/CD) — el pipeline
+      [`../.github/workflows/deploy-ms-catalogo.yml`](../.github/workflows/deploy-ms-catalogo.yml) ya existe
+      y se activa solo al hacer push a esta carpeta.
