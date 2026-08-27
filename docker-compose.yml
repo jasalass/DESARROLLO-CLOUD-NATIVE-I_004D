@@ -27,10 +27,12 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      # Cada script V1__init.sql se ejecuta una sola vez, al crear el volumen por primera vez.
-      - ./db/schema_usuarios:/docker-entrypoint-initdb.d/schema_usuarios
-      - ./db/schema_catalogo:/docker-entrypoint-initdb.d/schema_catalogo
-      - ./db/schema_pujas:/docker-entrypoint-initdb.d/schema_pujas
+      # El entrypoint de Postgres NO recorre subcarpetas dentro de docker-entrypoint-initdb.d/, así que
+      # cada V1__init.sql se monta como archivo suelto, con prefijo numérico para fijar el orden de
+      # ejecución. Se ejecutan una sola vez, al crear el volumen por primera vez.
+      - ./db/schema_usuarios/V1__init.sql:/docker-entrypoint-initdb.d/01-schema_usuarios.sql
+      - ./db/schema_catalogo/V1__init.sql:/docker-entrypoint-initdb.d/02-schema_catalogo.sql
+      - ./db/schema_pujas/V1__init.sql:/docker-entrypoint-initdb.d/03-schema_pujas.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U subastalive -d subastalive"]
       interval: 5s

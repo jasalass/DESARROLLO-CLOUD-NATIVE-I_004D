@@ -4,6 +4,9 @@
 > quien lo construya (en cualquier stack — Spring Boot, Node, .NET, lo que sea) pueda hacerlo sin coordinar
 > cada detalle en vivo con el resto del equipo. Ver el plan completo en
 > [`../docs/SubastaLive_Plan_de_Proyecto_v3.pdf`](../docs/SubastaLive_Plan_de_Proyecto_v3.pdf) (secciones 5.6, 6.2, 6.3).
+>
+> Convenciones generales (formato de error, tipos de dato, roles, header de auth) están centralizadas en el
+> [README principal](../README.md#convenciones-de-api-compartidas) para no repetirlas en los tres servicios.
 
 ## Responsabilidad
 
@@ -29,33 +32,104 @@ Cubre las historias:
 - El rol autorizado se lee del claim de rol dentro del token, no de la ruta ni del issuer (RF-30, RF-34).
 - El identificador de usuario a usar como clave de negocio es el claim `sub` del token.
 
+## Modelo de datos (JSON)
+
+### `Usuario`
+
+```json
+{
+  "sub": "b3f1c2a4-1234-4a11-9c31-abcdef123456",
+  "rol": "POSTOR",
+  "nombre": "Pamela Álvarez",
+  "email": "pamela.alvarez@example.com",
+  "fechaRegistro": "2026-08-20T14:03:00Z"
+}
+```
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `sub` | string (uuid) | Igual al claim `sub` del token que emitió Cognito o Entra ID |
+| `rol` | string (enum) | `POSTOR` \| `MARTILLERO` \| `ADMINISTRADOR` — tomado del claim de rol del token, no editable por el usuario |
+| `nombre` | string | Tomado del claim del token si existe (`name`), o `null` |
+| `email` | string | Tomado del claim del token si existe (`email`), o `null` |
+| `fechaRegistro` | string (datetime ISO-8601) | Fecha del primer login (ver auto-provisioning más abajo) |
+
+### `ItemHistorial`
+
+```json
+{ "pujaId": "9a2f1a10-...", "subastaId": "1e77c3b0-...", "monto": 24000, "fecha": "2026-08-27T19:55:00Z" }
+```
+
+No incluye `resultado` (ganada/perdida) porque la determinación del mejor postor al cierre (RF-19) recién se
+implementa en la **Etapa 3**; en la Etapa 1 este endpoint solo expone qué pujas hizo el usuario. El frontend
+puede cruzarlo con el estado de la subasta (`ms-catalogo`) si necesita mostrar algo más elaborado.
+
 ## Endpoints que debe exponer
 
-| Método | Ruta | Rol requerido | Descripción |
-|---|---|---|---|
-| `GET` | `/usuarios/me` | Postor, Martillero, Admin | Devuelve el perfil del usuario autenticado (según `sub` del token). Si no existe aún, créalo on-the-fly con los datos básicos del token (auto-provisioning en el primer login) o falla con 404 si se prefiere provisioning explícito — documentar la decisión aquí una vez tomada. |
-| `GET` | `/usuarios/{sub}/historial` | Postor (solo su propio `sub`), Admin | Historial de pujas y adjudicaciones del postor (RF-15). El contenido real de pujas vive en `ms-pujas`; este endpoint puede necesitar consultarlo (ver más abajo) o mantener una copia de solo lectura sincronizada por integración futura (Etapa 2/3). |
+### `GET /usuarios/me`
 
-> Los nombres exactos de ruta pueden ajustarse; lo importante es mantener el contrato con el frontend y
-> documentar aquí cualquier cambio.
+Devuelve (y provisiona si no existe) el perfil del usuario autenticado.
+
+- **Rol requerido:** cualquiera autenticado (Postor, Martillero, Administrador).
+- **Request:** sin body. Headers: `Authorization: Bearer <jwt>`.
+- **Decisión tomada — auto-provisioning:** si no existe un `Usuario` para el `sub` del token, se crea en esa
+  misma llamada usando el `sub`, el `rol` y los claims `name`/`email` disponibles en el token, con
+  `fechaRegistro = ahora`. Este endpoint **no debe responder 404** en el flujo normal — siempre devuelve un
+  perfil, recién creado o existente.
+- **Response `200 OK`:**
+  ```json
+  {
+    "sub": "b3f1c2a4-1234-4a11-9c31-abcdef123456",
+    "rol": "POSTOR",
+    "nombre": "Pamela Álvarez",
+    "email": "pamela.alvarez@example.com",
+    "fechaRegistro": "2026-08-20T14:03:00Z"
+  }
+  ```
+- **Response `401 Unauthorized`:** token ausente, inválido o expirado (ver formato de error estándar en el README principal).
+
+### `GET /usuarios/{sub}/historial`
+
+Historial de pujas del usuario (RF-15).
+
+- **Rol requerido:** Postor (solo puede pedir su propio `sub` — comparar contra el `sub` del token, 403 si no coincide), o Administrador (puede pedir cualquiera).
+- **Request:** path param `sub` (uuid). Query params opcionales: `limit` (default 20), `offset` (default 0).
+- **Response `200 OK`:**
+  ```json
+  {
+    "usuarioSub": "b3f1c2a4-1234-4a11-9c31-abcdef123456",
+    "pujas": [
+      { "pujaId": "9a2f1a10-...", "subastaId": "1e77c3b0-...", "monto": 24000, "fecha": "2026-08-27T19:55:00Z" },
+      { "pujaId": "8b1e77aa-...", "subastaId": "0fa3d221-...", "monto": 15000, "fecha": "2026-08-20T11:02:00Z" }
+    ]
+  }
+  ```
+- **Response `403 Forbidden`:** un postor pidiendo el historial de otro `sub`.
 
 ## Comunicación con otros microservicios
 
 **Etapa 1 no tiene mensajería (RabbitMQ/Kafka aún no existen), así que cualquier comunicación entre
 servicios en esta etapa es síncrona vía HTTP.**
 
-- `ms-usuarios` **no necesita llamar** a `ms-catalogo` ni a `ms-pujas` para resolver sus propios endpoints
-  (el perfil se arma solo con el token).
-- Para armar `GET /usuarios/{sub}/historial` con datos reales de pujas, `ms-usuarios` probablemente deba
-  llamar a un endpoint interno de `ms-pujas` (p. ej. `GET /pujas?usuarioSub={sub}`, ver contrato en
-  [`../ms-pujas/README.md`](../ms-pujas/README.md)). Definir si esa llamada es síncrona directa (más simple
-  para Etapa 1) o si se difiere a cuando exista streaming (Etapa 3, más correcto a largo plazo). Documentar
-  la decisión tomada.
+- `ms-usuarios` **no llama a nadie** para resolver `GET /usuarios/me` (el perfil se arma solo con el token).
+- Para armar `GET /usuarios/{sub}/historial`, `ms-usuarios` llama a:
+
+  **`GET {MS_PUJAS_BASE_URL}/pujas?usuarioSub={sub}`** (contrato completo en [`../ms-pujas/README.md`](../ms-pujas/README.md))
+
+  Reenviar el JWT original de la petición entrante en esta llamada saliente (Etapa 1 no define aún un
+  mecanismo de autenticación servicio-a-servicio separado del JWT de usuario).
+
+  Respuesta esperada de `ms-pujas`:
+  ```json
+  [
+    { "id": "9a2f1a10-...", "subastaId": "1e77c3b0-...", "monto": 24000, "fecha": "2026-08-27T19:55:00Z" }
+  ]
+  ```
+  `ms-usuarios` mapea `id` → `pujaId` al construir su propia respuesta.
+
 - Nadie más debería necesitar llamar a `ms-usuarios` en la Etapa 1, salvo el frontend.
 
 ## Variables de entorno esperadas
-
-Definir el nombre exacto que uses, pero como mínimo el servicio necesitará:
 
 | Variable | Descripción |
 |---|---|
@@ -64,6 +138,7 @@ Definir el nombre exacto que uses, pero como mínimo el servicio necesitará:
 | `DB_POOL_MAX_SIZE` | Límite del pool de conexiones por contenedor (RNF-05) |
 | `JWT_ISSUER_URI_COGNITO` | Issuer URI del user pool de Cognito |
 | `JWT_ISSUER_URI_ENTRA` | Issuer URI del tenant de Entra ID |
+| `MS_PUJAS_BASE_URL` | URL base para llamar a `ms-pujas` (ej. `http://ms-pujas:8083` en Docker Compose) |
 | `SERVER_PORT` | Puerto HTTP del servicio (sugerido: `8081`) |
 
 ## Evolución prevista (no implementar todavía)
@@ -71,15 +146,17 @@ Definir el nombre exacto que uses, pero como mínimo el servicio necesitará:
 - **Etapa 2:** sin cambios de responsabilidad; puede empezar a consumir eventos de RabbitMQ si el diseño
   final lo requiere para mantener el historial actualizado sin llamadas síncronas.
 - **Etapa 3:** podría convertirse en consumidor Kafka del tópico de pujas para materializar el historial de
-  forma asíncrona en lugar de llamar síncronamente a `ms-pujas`. Si se anticipa esto, conviene separar la
-  lógica de "armar el historial" de "cómo se obtienen los datos", para no reescribir todo después.
+  forma asíncrona en lugar de llamar síncronamente a `ms-pujas`, y podría enriquecer `ItemHistorial` con
+  `resultado` una vez que exista `ms-adjudicacion`. Si se anticipa esto, conviene separar la lógica de "armar
+  el historial" de "cómo se obtienen los datos", para no reescribir todo después.
 
 ## Checklist para quien lo implemente
 
 - [ ] Definir el stack (Spring Boot es lo planeado originalmente, pero es libre).
-- [ ] Modelar la entidad de perfil de usuario (campos mínimos: `sub`, rol, nombre/email si vienen del token, fecha de registro).
+- [ ] Modelar la entidad `Usuario` según el JSON de arriba.
 - [ ] Migraciones de `schema_usuarios` (ver `../db/schema_usuarios`).
 - [ ] Validación JWT multi-issuer.
-- [ ] Implementar y documentar aquí la decisión de auto-provisioning del perfil.
+- [ ] Implementar el auto-provisioning en `GET /usuarios/me`.
+- [ ] Cliente HTTP hacia `ms-pujas` para `GET /usuarios/{sub}/historial`.
 - [ ] Exponer `/health` para verificación de despliegue.
 - [ ] Dockerfile para poder correrlo en el `docker-compose.yml` de la raíz del repo.

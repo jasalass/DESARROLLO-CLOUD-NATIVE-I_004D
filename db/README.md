@@ -14,12 +14,28 @@ Amazon RDS - PostgreSQL
 
 ## Contenido de esta carpeta
 
-Cada subcarpeta (`schema_usuarios/`, `schema_catalogo/`, `schema_pujas/`) contiene el script SQL que crea el
-esquema. **Cada equipo/persona a cargo de un microservicio agrega aquí las tablas de su propio esquema** a
-medida que las define — este repositorio solo deja creado el esquema vacío como punto de partida, para no
-imponer un modelo de datos que le corresponde decidir a quien implemente cada servicio.
+Cada subcarpeta (`schema_usuarios/`, `schema_catalogo/`, `schema_pujas/`) contiene un `V1__init.sql` que crea
+el esquema **y** un primer set de tablas, derivado directamente del modelo JSON documentado en el `README.md`
+de cada microservicio (secciones "Modelo de datos"):
 
-Convención de nombres de archivo sugerida (estilo migración, no obligatorio pero recomendado):
+| Script | Tablas | Basado en |
+|---|---|---|
+| `schema_usuarios/V1__init.sql` | `usuarios` | `Usuario` en [`../ms-usuarios/README.md`](../ms-usuarios/README.md) |
+| `schema_catalogo/V1__init.sql` | `lotes`, `subastas` | `Lote`, `Subasta` en [`../ms-catalogo/README.md`](../ms-catalogo/README.md) |
+| `schema_pujas/V1__init.sql` | `pujas` | `Puja` en [`../ms-pujas/README.md`](../ms-pujas/README.md) |
+
+Es un punto de partida avanzado, no un modelo cerrado: **quien implemente cada microservicio puede ajustar
+tipos, agregar columnas o crear tablas adicionales** dentro de su propio esquema a medida que lo necesite —
+solo debe mantener actualizado tanto el script SQL como el modelo JSON del README para que ambos no se
+desincronicen.
+
+Ningún script crea claves foráneas hacia un esquema que no es el suyo (por ejemplo, `schema_pujas.pujas` no
+tiene FK real hacia `schema_catalogo.subastas`, solo la columna `subasta_id`) — es una **referencia lógica**,
+no física, consistente con que cada microservicio es dueño exclusivo de su esquema (RNF-06). La validación de
+que esos IDs existen y son coherentes se hace vía las llamadas HTTP entre servicios documentadas en cada
+README, no vía integridad referencial de base de datos.
+
+Convención de nombres de archivo (estilo migración, no obligatorio pero recomendado):
 `V1__init.sql`, `V2__agrega_tabla_x.sql`, etc., para que el orden de aplicación quede claro aunque no se use
 una herramienta de migraciones (Flyway/Liquibase). Si el equipo prefiere usar una de esas herramientas,
 documentarlo aquí.
