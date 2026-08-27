@@ -4,6 +4,10 @@ Plataforma cloud native de subastas en línea. Proyecto de la asignatura DSY1107
 
 El plan de proyecto completo, con historias de usuario, requisitos y arquitectura por etapa, está en [`docs/SubastaLive_Plan_de_Proyecto_v3.pdf`](docs/SubastaLive_Plan_de_Proyecto_v3.pdf).
 
+Para levantar toda la infraestructura de la Etapa 1 en AWS desde cero (RDS, ECR, ECS, ALB, Cognito, Entra ID,
+API Gateway y el frontend en S3+CloudFront), sigue [`docs/despliegue-aws.md`](docs/despliegue-aws.md) — está
+pensada para que cada persona del equipo la haga una vez en su propio laboratorio.
+
 ## Estructura del monorepo
 
 ```
@@ -159,31 +163,57 @@ docker compose down -v    # detiene todo y borra el volumen (reinicia la base de
 
 ## CI/CD — despliegue automático a AWS (GitHub Actions)
 
-Cada microservicio tiene su propio workflow en [`.github/workflows/`](.github/workflows/)
-(`deploy-ms-usuarios.yml`, `deploy-ms-catalogo.yml`, `deploy-ms-pujas.yml`). Al hacer push a `main` que toque
-archivos dentro de la carpeta de un microservicio (o disparándolo a mano desde la pestaña **Actions** de
-GitHub), el workflow:
+Hay cuatro workflows en [`.github/workflows/`](.github/workflows/), uno por cada parte desplegable del
+monorepo, y cada uno se activa **solo** por cambios en su propia carpeta — se despliegan de forma
+independiente entre sí, consistente con que cada pieza escala y se despliega por separado (RNF-01).
+
+### Microservicios (`deploy-ms-usuarios.yml`, `deploy-ms-catalogo.yml`, `deploy-ms-pujas.yml`)
+
+Al hacer push a `main` que toque archivos dentro de la carpeta de un microservicio (o disparándolo a mano
+desde la pestaña **Actions** de GitHub):
 
 1. Construye la imagen Docker del servicio (`docker build ./ms-x`).
 2. La sube a **Amazon ECR**, con dos tags: el SHA del commit (trazabilidad/rollback) y `latest`.
 3. Ejecuta `aws ecs update-service --force-new-deployment` sobre el servicio de **ECS** correspondiente, que
    vuelve a desplegar la tarea tirando la imagen `latest` recién publicada.
 
-Cada workflow solo se activa por cambios en su propia carpeta (`ms-usuarios/**`, etc.), así que los tres
-servicios se despliegan de forma independiente entre sí, consistente con que cada uno escala y se despliega
-por separado (RNF-01).
-
 **Importante:** el workflow asume que ya existe un `Dockerfile` en la carpeta del microservicio. Hasta que
 alguien lo agregue, el workflow existe pero fallará si se dispara (no hay nada que construir) — es
 intencional, queda listo para activarse solo cuando el servicio tenga código.
 
-### Prerrequisitos de infraestructura (manuales, una sola vez por microservicio)
+### Frontend (`deploy-frontend.yml`)
 
-Antes de que el pipeline pueda desplegar algo, debe existir en AWS:
+El frontend no va a ECS/ECR: se despliega como **sitio estático en S3, servido a través de CloudFront**
+(sección 6.3 del plan). Al hacer push a `main` que toque `frontend/**`:
 
-1. **Un repositorio en Amazon ECR** por microservicio (ej. `subastalive/ms-usuarios`, `subastalive/ms-catalogo`, `subastalive/ms-pujas`).
+1. Instala dependencias (`npm ci`) y genera el build de producción (`npm run build`, que deja los archivos
+   estáticos en `frontend/dist/`).
+2. Sincroniza `dist/` al bucket S3 con `aws s3 sync --delete` (sube lo nuevo/cambiado, borra lo que ya no
+   está).
+3. Si hay una distribución de CloudFront configurada, invalida su caché (`aws cloudfront create-invalidation
+   --paths "/*"`) para que dejen de servirse versiones viejas cacheadas.
+
+Este paso 3 se salta automáticamente si no se define la variable `CLOUDFRONT_DISTRIBUTION_ID` (por ejemplo,
+mientras se prueba solo con el bucket S3 sin CDN delante todavía).
+
+### Prerrequisitos de infraestructura (manuales, una sola vez)
+
+**Para cada microservicio**, debe existir en AWS:
+
+1. **Un repositorio en Amazon ECR** (ej. `subastalive/ms-usuarios`, `subastalive/ms-catalogo`, `subastalive/ms-pujas`).
 2. **Un cluster de ECS** (puede ser uno solo, compartido por los tres servicios) y, dentro de él, **una task definition + un service de ECS por microservicio**, con el contenedor de la task definition apuntando a `<ECR_REGISTRY>/<repositorio>:latest` — el workflow no crea ni actualiza la task definition, solo fuerza a ECS a re-halar la imagen `latest`.
 3. Un **Application Load Balancer** y su target group asociados al service de ECS (para que el API Gateway pueda enrutar hacia él), según la sección 5.1 del plan.
+
+**Para el frontend:**
+
+1. **Un bucket S3** para alojar los archivos estáticos — recomendado **privado**, sin acceso público directo.
+2. **Una distribución de CloudFront** con el bucket como origen, usando **Origin Access Control (OAC)** para
+   que solo CloudFront pueda leer del bucket (nadie llega directo al S3).
+3. **Manejo de rutas de SPA:** como el ruteo lo resuelve React Router en el cliente, hay que configurar en
+   CloudFront una *custom error response* que mapee `403` y `404` a `/index.html` con status `200` — si no,
+   refrescar la página en una ruta interna (ej. `/subastas/123`) rompe con error en vez de cargar la app.
+4. (Opcional, recomendado) Certificado en **ACM** + dominio propio si se quiere servir bajo un dominio propio
+   en vez de la URL default de CloudFront.
 
 ### Secrets y Variables que hay que configurar en GitHub
 
@@ -204,6 +234,8 @@ leerlos sin exponerlos como secretos innecesariamente.
 | `ECS_SERVICE_USUARIOS` | Variable | Nombre del service de ECS de `ms-usuarios` |
 | `ECS_SERVICE_CATALOGO` | Variable | Nombre del service de ECS de `ms-catalogo` |
 | `ECS_SERVICE_PUJAS` | Variable | Nombre del service de ECS de `ms-pujas` |
+| `S3_BUCKET_FRONTEND` | Variable | Nombre del bucket S3 donde se sube el build del frontend |
+| `CLOUDFRONT_DISTRIBUTION_ID` | Variable | ID de la distribución de CloudFront a invalidar (dejar vacía/sin crear si aún no hay CDN delante del bucket) |
 
 El registro de ECR (`ECR_REGISTRY`, con forma `<id-de-cuenta>.dkr.ecr.<region>.amazonaws.com`) no se configura
 a mano: la acción `aws-actions/amazon-ecr-login` lo resuelve automáticamente a partir de las credenciales.
@@ -229,10 +261,11 @@ de un día para otro en este tipo de laboratorio.
 
 ### Disparar un despliegue
 
-- **Automático:** `git push` a `main` con cambios dentro de `ms-usuarios/`, `ms-catalogo/` o `ms-pujas/`.
-- **Manual:** pestaña **Actions** del repositorio → elegir el workflow del servicio → **Run workflow**.
-- **Seguimiento:** pestaña **Actions** para ver el log del pipeline; consola de ECS (o CloudWatch Logs de la
-  task definition) para ver si el contenedor nuevo levantó bien.
+- **Automático:** `git push` a `main` con cambios dentro de `ms-usuarios/`, `ms-catalogo/`, `ms-pujas/` o `frontend/`.
+- **Manual:** pestaña **Actions** del repositorio → elegir el workflow correspondiente → **Run workflow**.
+- **Seguimiento:** pestaña **Actions** para ver el log del pipeline; para los microservicios, consola de ECS
+  (o CloudWatch Logs de la task definition) para ver si el contenedor nuevo levantó bien; para el frontend,
+  la URL de CloudFront (o del bucket) directamente.
 
 ## Cómo levantar cada parte
 
