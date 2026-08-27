@@ -1,0 +1,24 @@
+# Este archivo cubre solo lo transversal al monorepo.
+# `frontend/` ya tiene su propio .gitignore. Los ms-* aún no tienen código: quien implemente cada
+# microservicio debe agregar el .gitignore correspondiente a su stack (target/ si es Java, node_modules/
+# si es Node, bin/obj si es .NET, etc.) — no asumir una tecnología aquí (R1.7 del plan).
+
+# IDEs
+.idea/
+.vscode/
+*.iml
+.classpath
+.project
+.settings/
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+
+# Variables de entorno / secretos
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log

@@ -1,0 +1,131 @@
+# Entorno local de SubastaLive — Etapa 1.
+#
+# Levanta hoy mismo:
+#   - postgres: base de datos compartida con un esquema por microservicio (ver db/README.md)
+#   - adminer: UI web liviana para inspeccionar la base sin instalar nada (http://localhost:8080)
+#
+# Los tres microservicios (ms-usuarios, ms-catalogo, ms-pujas) están dejados como plantilla comentada
+# más abajo: cuando cada uno tenga su propio Dockerfile, descomenta su bloque, ajusta el "build.context"
+# si hace falta y listo — ya quedan en la misma red que la base de datos, con las variables de entorno
+# documentadas en el README de cada servicio.
+#
+# Uso:
+#   docker compose up -d          # levanta lo que esté activo
+#   docker compose down           # detiene todo, conserva los datos
+#   docker compose down -v        # detiene todo y borra el volumen de la base (reinicia desde cero)
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: subastalive-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: subastalive
+      POSTGRES_USER: subastalive
+      POSTGRES_PASSWORD: subastalive
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Cada script V1__init.sql se ejecuta una sola vez, al crear el volumen por primera vez.
+      - ./db/schema_usuarios:/docker-entrypoint-initdb.d/schema_usuarios
+      - ./db/schema_catalogo:/docker-entrypoint-initdb.d/schema_catalogo
+      - ./db/schema_pujas:/docker-entrypoint-initdb.d/schema_pujas
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U subastalive -d subastalive"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - subastalive-net
+
+  adminer:
+    image: adminer:latest
+    container_name: subastalive-adminer
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    ports:
+      - "8080:8080"
+    networks:
+      - subastalive-net
+
+  # ---------------------------------------------------------------------------------------------
+  # PLANTILLAS — descomentar cuando exista el Dockerfile de cada microservicio.
+  # Los puertos y nombres de variables coinciden con lo documentado en el README de cada servicio.
+  # ---------------------------------------------------------------------------------------------
+
+  # ms-usuarios:
+  #   build:
+  #     context: ./ms-usuarios
+  #   container_name: subastalive-ms-usuarios
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #   environment:
+  #     DB_HOST: postgres
+  #     DB_PORT: 5432
+  #     DB_NAME: subastalive
+  #     DB_USERNAME: subastalive
+  #     DB_PASSWORD: subastalive
+  #     DB_POOL_MAX_SIZE: 5
+  #     JWT_ISSUER_URI_COGNITO: ""
+  #     JWT_ISSUER_URI_ENTRA: ""
+  #     SERVER_PORT: 8081
+  #   ports:
+  #     - "8081:8081"
+  #   networks:
+  #     - subastalive-net
+
+  # ms-catalogo:
+  #   build:
+  #     context: ./ms-catalogo
+  #   container_name: subastalive-ms-catalogo
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #   environment:
+  #     DB_HOST: postgres
+  #     DB_PORT: 5432
+  #     DB_NAME: subastalive
+  #     DB_USERNAME: subastalive
+  #     DB_PASSWORD: subastalive
+  #     DB_POOL_MAX_SIZE: 5
+  #     JWT_ISSUER_URI_COGNITO: ""
+  #     JWT_ISSUER_URI_ENTRA: ""
+  #     MS_PUJAS_BASE_URL: "http://ms-pujas:8083"
+  #     SERVER_PORT: 8082
+  #   ports:
+  #     - "8082:8082"
+  #   networks:
+  #     - subastalive-net
+
+  # ms-pujas:
+  #   build:
+  #     context: ./ms-pujas
+  #   container_name: subastalive-ms-pujas
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #   environment:
+  #     DB_HOST: postgres
+  #     DB_PORT: 5432
+  #     DB_NAME: subastalive
+  #     DB_USERNAME: subastalive
+  #     DB_PASSWORD: subastalive
+  #     DB_POOL_MAX_SIZE: 5
+  #     JWT_ISSUER_URI_COGNITO: ""
+  #     JWT_ISSUER_URI_ENTRA: ""
+  #     MS_CATALOGO_BASE_URL: "http://ms-catalogo:8082"
+  #     SERVER_PORT: 8083
+  #   ports:
+  #     - "8083:8083"
+  #   networks:
+  #     - subastalive-net
+
+networks:
+  subastalive-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
