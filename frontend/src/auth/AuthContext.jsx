@@ -6,27 +6,31 @@ const AuthContext = createContext(null);
 
 const MOCK_SESSION_KEY = "subastalive.mockSession";
 
+// El sub debe ser un UUID válido de verdad: en modo local, el backend real (ms-pujas) lo parsea como
+// UUID (matching schema_pujas.pujas.usuario_sub) — un string tipo "mock-postor-..." rompería ahí.
+// El accessToken sigue el formato "local:<sub>:<ROL>" que entiende LocalTokenAuthFilter en ms-pujas
+// cuando corre con el perfil "local" (ver docker-compose.yml) — no es un JWT real, es solo para pruebas.
 const MOCK_USERS = {
   POSTOR: {
     role: "POSTOR",
-    sub: "mock-postor-0000-0000-0000-000000000001",
+    sub: "b3f1c2a4-0000-4000-8000-000000000001",
     nombre: "Postor de Prueba",
     email: "postor@example.com",
-    accessToken: "mock-access-token-postor",
+    accessToken: "local:b3f1c2a4-0000-4000-8000-000000000001:POSTOR",
   },
   MARTILLERO: {
     role: "MARTILLERO",
-    sub: "mock-martillero-0000-0000-000000000001",
+    sub: "d81fa021-0000-4000-8000-000000000001",
     nombre: "Martillero de Prueba",
     email: "martillero@example.com",
-    accessToken: "mock-access-token-martillero",
+    accessToken: "local:d81fa021-0000-4000-8000-000000000001:MARTILLERO",
   },
   ADMINISTRADOR: {
     role: "ADMINISTRADOR",
-    sub: "mock-admin-0000-0000-0000-000000000001",
+    sub: "e5f2b132-0000-4000-8000-000000000001",
     nombre: "Administrador de Prueba",
     email: "admin@example.com",
-    accessToken: "mock-access-token-admin",
+    accessToken: "local:e5f2b132-0000-4000-8000-000000000001:ADMINISTRADOR",
   },
 };
 

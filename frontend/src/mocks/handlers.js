@@ -51,7 +51,7 @@ export const handlers = [
     }
     const nuevoLote = {
       id: crypto.randomUUID(),
-      martilleroSub: "mock-martillero-0000-0000-000000000001",
+      martilleroSub: "d81fa021-0000-4000-8000-000000000001",
       titulo: body.titulo,
       descripcion: body.descripcion ?? "",
       precioBase: body.precioBase,
@@ -107,7 +107,7 @@ export const handlers = [
     const nuevaPuja = {
       id: crypto.randomUUID(),
       subastaId: body.subastaId,
-      usuarioSub: "mock-postor-0000-0000-0000-000000000001",
+      usuarioSub: "b3f1c2a4-0000-4000-8000-000000000001",
       monto: body.monto,
       fecha: new Date().toISOString(),
     };
@@ -140,7 +140,7 @@ export const handlers = [
   // ---- ms-usuarios ----
   http.get(`${API_BASE_URL}/usuarios/me`, () => {
     return HttpResponse.json({
-      sub: "mock-postor-0000-0000-0000-000000000001",
+      sub: "b3f1c2a4-0000-4000-8000-000000000001",
       rol: "POSTOR",
       nombre: "Postor de Prueba",
       email: "postor@example.com",
