@@ -1,11 +1,12 @@
-# Build + deploy del frontend como sitio estático (S3 + CloudFront), según la sección 6.3 del plan.
+# Build + push a ECR + despliegue en ECS para el frontend — mismo patrón que los microservicios
+# (deploy-ms-usuarios.yml, deploy-ms-catalogo.yml, deploy-ms-pujas.yml), no S3+CloudFront.
 #
 # Se activa con push a main que toque algo dentro de frontend/ (o manualmente desde la pestaña Actions).
-# La invalidación de CloudFront es opcional: si no se define la variable CLOUDFRONT_DISTRIBUTION_ID,
-# ese paso se salta (por ejemplo, si todavía solo se sirve desde el bucket S3 sin CDN delante).
+# Requiere que frontend/Dockerfile exista (ya está en el repo) y que el ECR/ECS/ALB del frontend estén
+# creados — ver docs/despliegue-aws.md.
 #
-# Prerrequisitos de infraestructura y la lista completa de Secrets/Variables están documentados en el
-# README principal, sección "CI/CD — despliegue automático a AWS".
+# Las variables VITE_* son de build (Vite las incrusta en el bundle, no son variables de entorno del
+# contenedor en ejecución), así que se pasan como --build-arg tomadas de Variables del repositorio.
 
 name: Deploy frontend
 
@@ -22,31 +23,16 @@ concurrency:
 
 env:
   AWS_REGION: ${{ vars.AWS_REGION }}
-  S3_BUCKET: ${{ vars.S3_BUCKET_FRONTEND }}
-  CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY_FRONTEND }}
+  ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+  ECS_SERVICE: ${{ vars.ECS_SERVICE_FRONTEND }}
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
     steps:
       - name: Checkout del repositorio
         uses: actions/checkout@v4
-
-      - name: Configurar Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Instalar dependencias
-        run: npm ci
-
-      - name: Build de producción
-        run: npm run build
 
       - name: Configurar credenciales AWS (laboratorio AWS Academy — ver README)
         uses: aws-actions/configure-aws-credentials@v4
@@ -56,13 +42,32 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Sincronizar el build al bucket S3
-        run: |
-          aws s3 sync ./dist "s3://$S3_BUCKET" --delete
+      - name: Login a Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Invalidar caché de CloudFront (si hay distribución configurada)
-        if: env.CLOUDFRONT_DISTRIBUTION_ID != ''
+      - name: Build, tag y push de la imagen a ECR
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
         run: |
-          aws cloudfront create-invalidation \
-            --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
-            --paths "/*"
+          docker build \
+            --build-arg VITE_AUTH_MODE="${{ vars.VITE_AUTH_MODE }}" \
+            --build-arg VITE_USE_MOCKS="${{ vars.VITE_USE_MOCKS }}" \
+            --build-arg VITE_API_BASE_URL="${{ vars.VITE_API_BASE_URL }}" \
+            --build-arg VITE_COGNITO_AUTHORITY="${{ vars.VITE_COGNITO_AUTHORITY }}" \
+            --build-arg VITE_COGNITO_CLIENT_ID="${{ vars.VITE_COGNITO_CLIENT_ID }}" \
+            --build-arg VITE_ENTRA_AUTHORITY="${{ vars.VITE_ENTRA_AUTHORITY }}" \
+            --build-arg VITE_ENTRA_CLIENT_ID="${{ vars.VITE_ENTRA_CLIENT_ID }}" \
+            -t "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
+            -t "$ECR_REGISTRY/$ECR_REPOSITORY:latest" \
+            ./frontend
+          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:latest"
+
+      - name: Forzar nuevo despliegue en ECS
+        run: |
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --force-new-deployment

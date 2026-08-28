@@ -187,7 +187,8 @@ etapa es síncrona vía HTTP.**
 
 - [ ] Definir el stack.
 - [ ] Modelar la entidad `Puja` según el JSON de arriba (con índice por `subastaId` para calcular el máximo rápido).
-- [ ] Migraciones de `schema_pujas` (ver `../db/schema_pujas`).
+- [ ] Migraciones de `schema_pujas` con Flyway (copiar el `V1__init.sql` de `../db/schema_pujas` a
+      `src/main/resources/db/migration/` — ver `../db/README.md`, sección "Migraciones automáticas").
 - [ ] Validación JWT multi-issuer.
 - [ ] Cliente HTTP hacia `ms-catalogo` (`/subastas/{id}/reglas`) para validar estado antes de aceptar la puja.
 - [ ] Exponer `/health`.

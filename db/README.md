@@ -35,10 +35,39 @@ no física, consistente con que cada microservicio es dueño exclusivo de su esq
 que esos IDs existen y son coherentes se hace vía las llamadas HTTP entre servicios documentadas en cada
 README, no vía integridad referencial de base de datos.
 
-Convención de nombres de archivo (estilo migración, no obligatorio pero recomendado):
-`V1__init.sql`, `V2__agrega_tabla_x.sql`, etc., para que el orden de aplicación quede claro aunque no se use
-una herramienta de migraciones (Flyway/Liquibase). Si el equipo prefiere usar una de esas herramientas,
-documentarlo aquí.
+Los nombres de archivo (`V1__init.sql`) ya siguen la convención de **Flyway** a propósito — es la herramienta
+elegida para las migraciones (ver siguiente sección). El `V1__init.sql` de cada carpeta es la **primera
+migración** de ese servicio: no se aplica a mano contra RDS en ningún momento — se copia dentro del propio
+microservicio y Flyway la ejecuta sola la primera vez que ese servicio se despliega. De ahí en adelante, las
+migraciones nuevas se agregan dentro de *su propio* código, no acá.
+
+## Migraciones automáticas una vez que el microservicio exista (Flyway)
+
+Igual que las imágenes Docker viajan con el código y se actualizan solas en cada deploy, el esquema de la
+base de datos puede hacer lo mismo — **no hace falta correr nada a mano contra RDS, ni siquiera la primera
+vez**. Cuando quien construya `ms-usuarios`/`ms-catalogo`/`ms-pujas` arranque su proyecto Spring Boot:
+
+1. Agregar la dependencia `flyway-core` (y `flyway-database-postgresql` en versiones recientes de Flyway).
+2. Copiar el `V1__init.sql` correspondiente de esta carpeta a
+   `src/main/resources/db/migration/V1__init.sql` dentro del propio microservicio.
+3. Configurar en `application.yml`:
+   ```yaml
+   spring:
+     flyway:
+       schemas: schema_usuarios   # el que corresponda a cada servicio
+       default-schema: schema_usuarios
+   ```
+4. Listo — de ahí en adelante, cualquier cambio de esquema es simplemente un archivo nuevo
+   `V2__agrega_tabla_x.sql`, `V3__...sql`, etc., commiteado junto con el código. Al arrancar, Flyway revisa
+   una tabla de control (`flyway_schema_history`, dentro del propio esquema del servicio) y aplica solo las
+   migraciones que todavía no corrió, en orden.
+
+Como la tarea de ECS ya vive en la misma subred privada con acceso a RDS (necesita conectarse a la base para
+funcionar de todos modos), la migración se aplica **como parte del mismo despliegue automático** — el mismo
+`git push` que actualiza el código Java actualiza el esquema. No hay ningún paso manual contra RDS en ningún
+momento: ni ahora, ni en el primer deploy de cada servicio, ni en los siguientes. RDS no tiene ninguna vía de
+acceso abierta salvo desde las propias tareas de ECS (ver `docs/despliegue-aws.md`, sección 3) — no existe un
+bastión ni acceso administrativo permanente en esta arquitectura.
 
 ## Cómo aplicar los scripts
 
@@ -53,8 +82,9 @@ docker compose exec postgres psql -U subastalive -d subastalive -f /docker-entry
 o simplemente reiniciar el volumen (`docker compose down -v && docker compose up`) si no importa perder los
 datos locales.
 
-**RDS (AWS):** aplicar los scripts manualmente contra la instancia (`psql` apuntando al endpoint de RDS,
-o mediante la herramienta de migraciones que el equipo decida adoptar).
+**RDS (AWS):** no se aplica nada a mano en ningún momento. La instancia se crea privada y vacía (ver
+[`../docs/despliegue-aws.md`](../docs/despliegue-aws.md), sección 3), y cada esquema aparece solo cuando el
+microservicio correspondiente se despliega por primera vez con Flyway ya integrado (ver sección de arriba).
 
 ## Credenciales / conexión local
 

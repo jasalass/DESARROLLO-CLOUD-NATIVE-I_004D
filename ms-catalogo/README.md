@@ -243,7 +243,8 @@ etapa es síncrona vía HTTP.**
 
 - [ ] Definir el stack.
 - [ ] Modelar entidades `Lote` y `Subasta` según el JSON de arriba, con su máquina de estados.
-- [ ] Migraciones de `schema_catalogo` (ver `../db/schema_catalogo`).
+- [ ] Migraciones de `schema_catalogo` con Flyway (copiar el `V1__init.sql` de `../db/schema_catalogo` a
+      `src/main/resources/db/migration/` — ver `../db/README.md`, sección "Migraciones automáticas").
 - [ ] Validación JWT multi-issuer + autorización por rol.
 - [ ] Scheduler de cierre automático al vencer el plazo.
 - [ ] Cliente HTTP hacia `ms-pujas` para enriquecer `GET /subastas/{id}`.

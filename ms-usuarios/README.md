@@ -154,7 +154,8 @@ servicios en esta etapa es síncrona vía HTTP.**
 
 - [ ] Definir el stack (Spring Boot es lo planeado originalmente, pero es libre).
 - [ ] Modelar la entidad `Usuario` según el JSON de arriba.
-- [ ] Migraciones de `schema_usuarios` (ver `../db/schema_usuarios`).
+- [ ] Migraciones de `schema_usuarios` con Flyway (copiar el `V1__init.sql` de `../db/schema_usuarios` a
+      `src/main/resources/db/migration/` — ver `../db/README.md`, sección "Migraciones automáticas").
 - [ ] Validación JWT multi-issuer.
 - [ ] Implementar el auto-provisioning en `GET /usuarios/me`.
 - [ ] Cliente HTTP hacia `ms-pujas` para `GET /usuarios/{sub}/historial`.

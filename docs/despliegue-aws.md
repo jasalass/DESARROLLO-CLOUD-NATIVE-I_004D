@@ -1,35 +1,37 @@
 # Despliegue de SubastaLive en AWS — guía paso a paso (consola web)
 
 Esta guía levanta, desde cero y en una sola cuenta de AWS Academy, toda la infraestructura de la **Etapa 1**:
-base de datos, cómputo en contenedores, balanceo de carga, identidad federada, puerta de entrada con
-validación de JWT, y el frontend como sitio estático.
+red (con subredes privadas de verdad), base de datos, cómputo en contenedores, balanceo de carga, identidad
+federada, puerta de entrada con validación de JWT, y el frontend — que se despliega **como otro contenedor
+más en ECS**, con el mismo patrón que los tres microservicios (no como sitio estático en S3+CloudFront, ver
+la nota en la sección 10).
 
-**Todo se configura en el portal web de AWS (y el portal de Azure para Entra ID) — no se usa la CLI de AWS
-en ningún paso.** Los únicos comandos de terminal que vas a necesitar son los normales de Docker (para
-construir la imagen) y de npm (para compilar el frontend); nada de `aws ec2 ...`, `aws ecs ...`, etc. Esos
-comandos sí existen, pero los ejecuta **GitHub Actions por ti** una vez que dejes cargados los Secrets —
-tú no los escribes.
+**Todo se configura en el portal web de AWS (y el portal de Azure para Entra ID) — no se usa la CLI de AWS en
+ningún paso.** Los únicos comandos de terminal que vas a necesitar son los normales de Docker (construir
+imágenes) y de npm (compilar el frontend). Ningún `aws ec2 ...`/`aws ecs ...` — esos los ejecuta **GitHub
+Actions por ti** una vez que dejes cargados los Secrets. RDS queda en una subred privada, pero no hace falta
+conectarse a ella a mano: cada microservicio crea y actualiza su propio esquema solo, con Flyway, al
+arrancar (ver sección 3).
 
 ## Por qué cada uno despliega todo
 
 Es tentador dividir el trabajo así: "yo hago el backend, tú el front, alguien más sube todo a AWS al final".
 Ese reparto deja a dos de cada tres personas del equipo sin haber tocado nunca la consola de AWS — y en la
 presentación de la pauta, cualquiera puede tener que explicar por qué el API Gateway valida el JWT antes de
-llegar al ALB, o por qué RDS tiene un esquema por servicio.
+llegar al ALB, o por qué RDS vive en una subred privada.
 
 Por eso esta guía asume que **una sola persona** despliega la arquitectura completa en su propia cuenta —
 pero está pensada para que las tres personas del equipo la sigan, cada una en su propio laboratorio de
 Canvas, usando una imagen de contenedor de práctica mientras los microservicios reales todavía se están
-construyendo. Al final, los tres han creado una RDS, un cluster ECS, un ALB, un API Gateway con autorizador
-JWT y un User Pool de Cognito con sus propias manos — no solo lo vieron en un diagrama.
+construyendo. Al final, los tres han creado una VPC con subredes privadas, un NAT Gateway, una RDS, un
+cluster ECS, un ALB, un API Gateway con autorizador JWT y un User Pool de Cognito con sus propias manos — no
+solo lo vieron en un diagrama.
 
 ## Antes de empezar
 
 Instala esto en tu máquina:
 
 - **Docker Desktop** — para construir la imagen de práctica (esto sí abre una terminal, es inevitable).
-- **pgAdmin** o **DBeaver** (cliente de base de datos con interfaz gráfica) — para aplicar los scripts de
-  esquema contra RDS sin usar la línea de comandos.
 - **Postman** (o Insomnia) — para probar el API Gateway con un token, sin usar `curl`.
 - **Node.js 20+** — para el build del frontend (`npm run build`).
 - El repositorio de SubastaLive clonado localmente.
@@ -42,30 +44,43 @@ Instala esto en tu máquina:
 > La sesión del laboratorio dura unas horas y las credenciales que le vas a pasar a GitHub expiran con ella.
 > Si un despliegue automático empieza a fallar de un día para otro, lo primero que hay que revisar es si el
 > laboratorio se venció (hay que volver a Canvas, reiniciarlo, y actualizar los Secrets en GitHub).
+>
+> **El NAT Gateway cobra por hora + por dato**, incluso parado no existe "pausarlo" — o está creado (cobrando)
+> o está borrado. Si te preocupa el gasto de créditos del laboratorio, bórralo cuando termines de trabajar
+> (sección 13) y créalo de nuevo la próxima sesión — es rápido (unos minutos), pero cualquier deploy que se
+> dispare mientras no exista va a fallar con `CannotPullContainerError` hasta que vuelva a estar arriba.
 
 ## El mapa completo
 
-Este es el camino que recorre una petición real una vez que todo esté desplegado. Cada sección de esta guía
-construye una de estas piezas, en este orden.
+Este es el camino que recorre una petición real una vez que todo esté desplegado, mostrando qué vive en
+subred **pública** y qué en subred **privada**. Cada sección de esta guía construye una de estas piezas, en
+este orden.
 
 ```mermaid
 flowchart TB
+  subgraph Publico["Subred pública"]
+    ALBF["ALB frontend<br/>puerto 80"]
+    ALB["ALB backend<br/>puerto 80 to target group"]
+    NAT["NAT Gateway"]
+  end
+
+  subgraph Privado["Subred privada"]
+    FE["frontend<br/>ECS/Fargate<br/>Nginx + build Vite"]
+    MSU["ms-usuarios<br/>ECS/Fargate<br/>revalida JWT"]
+    MSC["ms-catalogo<br/>ECS/Fargate<br/>revalida JWT"]
+    MSP["ms-pujas<br/>ECS/Fargate<br/>revalida JWT"]
+    RDS["RDS PostgreSQL<br/>un esquema por servicio<br/>sin acceso público"]
+  end
+
   Cognito["Amazon Cognito<br/>postores"]
   Entra["Microsoft Entra ID<br/>martillero / admin"]
   Browser["SPA navegador<br/>React + Vite"]
-  CloudFront["CloudFront<br/>CDN"]
-  S3["S3<br/>build estático"]
   APIGW["API Gateway<br/>valida issuer + firma + aud"]
-  ALB["ALB<br/>puerto 80 to target group"]
-  MSU["ms-usuarios<br/>ECS/Fargate<br/>revalida JWT"]
-  MSC["ms-catalogo<br/>ECS/Fargate<br/>revalida JWT"]
-  MSP["ms-pujas<br/>ECS/Fargate<br/>revalida JWT"]
-  RDS["RDS PostgreSQL<br/>un esquema por servicio"]
 
   Cognito <-->|"login code+PKCE, JWT"| Browser
   Entra <-->|"login code+PKCE, JWT"| Browser
-  S3 -->|"origen OAC"| CloudFront
-  CloudFront -->|"sirve SPA"| Browser
+  Browser -->|"GET /"| ALBF
+  ALBF -->|"target group"| FE
   Browser -->|"Bearer JWT"| APIGW
   APIGW -->|"reenvia"| ALB
   ALB -->|"target group"| MSU
@@ -74,7 +89,17 @@ flowchart TB
   MSU -->|"schema_usuarios"| RDS
   MSC -->|"schema_catalogo"| RDS
   MSP -->|"schema_pujas"| RDS
+  FE -.->|"pull de imagen"| NAT
+  MSU -.->|"pull de imagen"| NAT
+  MSC -.->|"pull de imagen"| NAT
+  MSP -.->|"pull de imagen"| NAT
 ```
+
+Dos ALB separados: uno solo lo usa el navegador para cargar el frontend, el otro solo lo usa el API Gateway
+para llegar a los microservicios — así no hay que mezclar reglas de listener por path en uno solo. Las tareas
+de ECS y RDS no tienen IP pública ni son alcanzables desde internet: las tareas salen a buscar su imagen a
+través del NAT Gateway, y a RDS no se entra desde afuera del todo — cada microservicio gestiona su propio
+esquema al arrancar (Flyway, ver sección 3), sin que nadie necesite conectarse a mano.
 
 ## 1. Entrar a la consola de AWS
 
@@ -89,45 +114,87 @@ Anota, mirando la esquina superior derecha de la consola:
 
 Vas a necesitar ambos datos más adelante para las URLs de ECR y de los issuers de Cognito.
 
-## 2. Base de datos — Amazon RDS
+## 2. Red — VPC, subredes privadas y NAT Gateway
 
-Todo lo demás depende de que esto exista primero.
+Todo lo demás vive dentro de esta red, así que va antes que la base de datos.
 
-1. En la barra de búsqueda de la consola, ve a **RDS → Create database**.
-2. Método de creación: **Standard create**.
-3. Motor: **PostgreSQL**, versión 16.x (la más reciente que ofrezca).
-4. Templates: **Free tier** (si aparece disponible) o **Dev/Test**.
-5. Settings: DB instance identifier `subastalive-db`; Master username `subastalive`; define una master
-   password y anótala (o deja que RDS la genere y la copias al final desde "View credential details").
-6. Instance configuration: la clase más pequeña disponible, `db.t3.micro`.
-7. Storage: 20 GiB, tipo gp3.
-8. Connectivity: "Don't connect to an EC2 compute resource"; VPC: la default; **Public access: Yes**; VPC
-   security group: **Create new**, nómbralo `subastalive-rds-sg`.
-9. Additional configuration → Initial database name: `subastalive` (anota el nombre que elijas, lo vas a
-   necesitar al conectarte).
-10. **Create database**. Espera a que el estado pase a **Available** (5–10 minutos).
-11. Entra a la instancia → pestaña **Connectivity & security** → copia el **Endpoint**.
+### Revisar el VPC default
 
-Ábrele el puerto solo a tu propia IP, no al mundo:
+1. **VPC → Your VPCs** → entra al que dice `Default VPC` → anota su **CIDR** (algo como `172.31.0.0/16`).
+2. **VPC → Subnets**, filtra por ese VPC → anota, de cada subred existente, su **CIDR** y su **Availability
+   Zone**. Todas estas son públicas (tienen ruta a un Internet Gateway) — son las que ya venías usando.
 
-12. Ve a **EC2 → Security Groups**, busca `subastalive-rds-sg`.
-13. Pestaña **Inbound rules → Edit inbound rules → Add rule**: Type `PostgreSQL`, Source: **My IP** → **Save
-    rules**.
+### Crear 2 subredes privadas
 
-### Aplicar los esquemas con pgAdmin (sin línea de comandos)
+3. **VPC → Subnets → Create subnet**. VPC: el default.
+4. Subnet 1: name `subastalive-private-1a`, Availability Zone: una cualquiera (ej. `us-east-1a`), IPv4 CIDR:
+   un bloque del mismo tamaño que las públicas (normalmente `/20`) que **no se solape** con ninguna subred
+   existente — usa las que anotaste en el paso 2 para elegir uno libre dentro del CIDR del VPC.
+5. **Add new subnet** → Subnet 2: name `subastalive-private-1b`, en **otra** AZ, otro bloque libre.
+6. **Create subnet**. Estas dos quedan sin "Auto-assign public IPv4" — así deben quedar (por defecto, una
+   subred nueva no lo trae activado).
 
-14. Abre pgAdmin → clic derecho en **Servers → Register → Server**.
-15. Pestaña **General**: nombre `subastalive`. Pestaña **Connection**: Host = el Endpoint copiado, Port
-    `5432`, Maintenance database = el nombre que elegiste (o `postgres`), Username `subastalive`, Password la
-    que definiste → **Save**.
-16. Con el servidor conectado, abre el **Query Tool** (ícono de rayo, o clic derecho → Query Tool).
-17. Abre en tu editor de texto `db/schema_usuarios/V1__init.sql`, copia todo su contenido, pégalo en el Query
-    Tool y ejecútalo (▶ o F5).
-18. Repite con `db/schema_catalogo/V1__init.sql` y `db/schema_pujas/V1__init.sql`.
-19. En el panel izquierdo de pgAdmin, expande **Databases → (tu base) → Schemas** — deben aparecer
-    `schema_usuarios`, `schema_catalogo` y `schema_pujas`.
+### NAT Gateway
 
-## 3. Una imagen para practicar el pipeline
+7. **VPC → NAT Gateways → Create NAT gateway**.
+8. Name: `subastalive-nat`. Subnet: elige una de las **públicas** existentes (el NAT vive en la pública,
+   presta salida a las privadas). Connectivity type: **Public**.
+9. Elastic IP allocation ID: **Allocate Elastic IP** (botón que crea una nueva ahí mismo).
+10. **Create NAT gateway**. Tarda unos minutos en pasar a **Available** — no sigas hasta que lo esté.
+
+### Tabla de rutas para las subredes privadas
+
+11. **VPC → Route Tables → Create route table**. Name: `subastalive-private-rt`. VPC: el default.
+12. Entra a la tabla creada → pestaña **Routes → Edit routes → Add route**: Destination `0.0.0.0/0`, Target
+    **NAT Gateway** → selecciona `subastalive-nat` → **Save changes**.
+13. Pestaña **Subnet associations → Edit subnet associations** → marca `subastalive-private-1a` y
+    `subastalive-private-1b` → **Save associations**.
+
+## 3. Base de datos — Amazon RDS (privada)
+
+### Grupo de subredes privado
+
+1. **RDS → Subnet groups → Create DB subnet group**.
+2. Name: `subastalive-private-subnet-group`. VPC: el default.
+3. Availability Zones: las 2 que usaste para las subredes privadas. Subnets: selecciona
+   `subastalive-private-1a` y `subastalive-private-1b` (no las públicas).
+4. **Create**.
+
+### La instancia
+
+5. **RDS → Create database → Standard create**.
+6. Motor: **PostgreSQL**, versión 16.x (la más reciente que ofrezca).
+7. Templates: **Free tier** (si aparece disponible) o **Dev/Test**.
+8. Settings: DB instance identifier `subastalive-db`; Master username `subastalive`; define una master
+   password y anótala.
+9. Instance configuration: la clase más pequeña disponible, `db.t3.micro`.
+10. Storage: 20 GiB, tipo gp3.
+11. Connectivity: "Don't connect to an EC2 compute resource"; VPC: la default; **DB subnet group**:
+    `subastalive-private-subnet-group`; **Public access: No**; VPC security group: **Create new**, nómbralo
+    `subastalive-rds-sg`.
+12. Additional configuration → Initial database name: `subastalive` (anótalo, lo necesitas al conectarte).
+13. **Create database**. Espera a que el estado pase a **Available** (5–10 minutos).
+14. Entra a la instancia → pestaña **Connectivity & security** → copia el **Endpoint**.
+
+### Security group: sin acceso desde afuera todavía
+
+15. `subastalive-rds-sg` nace sin reglas de entrada — así se queda por ahora. Más adelante (sección 6) le
+    agregas la única regla que va a tener: acceso desde `subastalive-ecs-sg`, para que las tareas de ECS
+    puedan conectarse. No hay ninguna otra vía de entrada, y no hace falta ninguna.
+
+### No hace falta aplicar los esquemas a mano
+
+RDS queda arriba, privada, y **vacía** — y así se queda hasta que el primer microservicio con código se
+despliegue. Cada microservicio trae Flyway (ver [`../db/README.md`](../db/README.md), sección "Migraciones
+automáticas") y, al arrancar por primera vez, crea su propio esquema y tablas solo, usando el mismo
+`V1__init.sql` que ya está en este repo. No hay ningún paso manual de base de datos en esta guía — ni ahora
+ni en deploys futuros.
+
+Si en algún momento necesitas mirar datos a mano (debugging puntual), no hay una vía permanente para eso en
+esta arquitectura — tocaría levantar un acceso temporal (por ejemplo, una EC2 chica solo para esa sesión) y
+volver a borrarlo después. No es parte del flujo normal.
+
+## 4. Una imagen para practicar el pipeline
 
 Como `ms-usuarios`, `ms-catalogo` y `ms-pujas` todavía no tienen código, arma una imagen de práctica
 ("ms-demo") solo para aprender el camino **ECR → ECS → ALB → API Gateway** de punta a punta. La reemplazas
@@ -156,7 +223,7 @@ docker run --rm -p 8080:8080 ms-demo
 
 Abre `http://localhost:8080` en el navegador — debe mostrar "ms-demo OK".
 
-## 4. Registro de imágenes — Amazon ECR
+## 5. Registro de imágenes — Amazon ECR
 
 1. Consola → **ECR → Create repository**. Nombre: `subastalive/ms-demo` → **Create repository**.
 2. Entra al repositorio recién creado y haz clic en **View push commands** (arriba a la derecha).
@@ -165,7 +232,7 @@ Abre `http://localhost:8080` en el navegador — debe mostrar "ms-demo OK".
 
 No hace falta escribir esos comandos a mano ni recordar la URL del registro — la consola los arma por ti.
 
-## 5. Cómputo — ECS con Fargate
+## 6. Cómputo — ECS con Fargate
 
 ### Cluster
 
@@ -184,7 +251,8 @@ group**):
 Vuelve a `subastalive-ecs-sg` → **Inbound rules → Add rule**: Type Custom TCP, Port `8080`, Source: elige
 **Custom** y busca `subastalive-alb-sg` en el desplegable → **Save**.
 
-Edita también `subastalive-rds-sg` (el que creó RDS) → **Add rule**: Type PostgreSQL, Source: `subastalive-ecs-sg` → **Save** — así las tareas de ECS pueden llegar a la base de datos.
+Edita también `subastalive-rds-sg` (el de la sección 3) → **Add rule**: Type PostgreSQL, Source:
+`subastalive-ecs-sg` → **Save** — así las tareas de ECS pueden llegar a la base de datos.
 
 ### Task definition
 
@@ -201,11 +269,12 @@ Edita también `subastalive-rds-sg` (el que creó RDS) → **Add rule**: Type Po
    existe todavía.
 8. **Create**.
 
-## 6. Balanceador — Application Load Balancer
+## 7. Balanceador — Application Load Balancer
 
 1. **EC2 → Load Balancers → Create load balancer → Application Load Balancer**.
 2. Name: `subastalive-alb`. Scheme: **Internet-facing**.
-3. VPC: la default. Mappings: selecciona al menos 2 zonas de disponibilidad con su subred.
+3. VPC: la default. Mappings: selecciona al menos 2 zonas de disponibilidad, con sus subredes **públicas**
+   (el ALB va en público, distinto de las tareas).
 4. Security groups: `subastalive-alb-sg` (quita el "default" si aparece preseleccionado).
 5. Listeners: HTTP puerto 80 → Default action: **Create target group**.
    - Target type: **IP**. Name: `subastalive-tg-demo`. Protocol HTTP, Port `8080`. VPC: la default.
@@ -220,20 +289,22 @@ Edita también `subastalive-rds-sg` (el que creó RDS) → **Add rule**: Type Po
 
 1. **ECS → Clusters → subastalive-cluster → Service → Create**.
 2. Launch type: **Fargate**. Task definition: `subastalive-ms-demo`. Service name: `ms-demo`. Desired tasks: `1`.
-3. Networking: VPC default, mismas subredes que el ALB, Security group: `subastalive-ecs-sg`.
-4. **Public IP: Turned ON.**
+3. Networking: VPC default, subredes **privadas** (`subastalive-private-1a`, `subastalive-private-1b`),
+   Security group: `subastalive-ecs-sg`.
+4. **Public IP: Turned OFF** — ya no lo necesita, sale a internet por el NAT Gateway de la sección 2.
 5. Load balancing: **Application Load Balancer** → selecciona `subastalive-alb`, listener 80, target group
    `subastalive-tg-demo`.
 6. **Create**.
 
-> **Sin esto, la tarea no arranca.** Los laboratorios de Academy normalmente no traen un NAT Gateway. Si el
-> "Public IP" queda apagado, la tarea no tiene salida a internet para descargar la imagen desde ECR y falla
-> con `CannotPullContainerError` — este es el error más común al seguir esta guía.
+> **Si el NAT Gateway no está `Available` todavía, esto falla.** La tarea no puede descargar la imagen de ECR
+> sin salida a internet, y sin NAT Gateway activo esa salida no existe — falla con
+> `CannotPullContainerError`. Confirma en VPC → NAT Gateways que el estado sea `Available` antes de crear el
+> service.
 
 Espera un par de minutos (el estado de la tarea debe llegar a **Running**, y el target en el target group a
 **healthy**) y abre `http://<DNS-del-ALB>` en el navegador — debe mostrar "ms-demo OK".
 
-## 7. Identidad — Cognito y Entra ID
+## 8. Identidad — Cognito y Entra ID
 
 ### Amazon Cognito (postores)
 
@@ -273,11 +344,11 @@ Esto es Azure, no AWS — vía [portal.azure.com](https://portal.azure.com):
 5. Anota **Application (client) ID** y **Directory (tenant) ID** — la authority es
    `https://login.microsoftonline.com/<TENANT_ID>/v2.0`.
 
-## 8. Puerta de entrada — API Gateway
+## 9. Puerta de entrada — API Gateway
 
 1. Consola → **API Gateway → Create API → HTTP API → Build**.
 2. **Add integration**: Integration type **HTTP**; Method **ANY**; Integration URL:
-   `http://<DNS-del-ALB>` (el que copiaste en el paso 6).
+   `http://<DNS-del-ALB>` (el que copiaste en la sección 7).
 3. **Configure routes**: método **ANY**, path `/{proxy+}`, apuntando a esa integración.
 4. **Configure stages**: deja el stage `$default` con auto-deploy activado.
 5. **Create**. En el resumen de la API, copia la **Invoke URL**.
@@ -311,42 +382,80 @@ Esto es Azure, no AWS — vía [portal.azure.com](https://portal.azure.com):
 > mecanismo con uno solo — la decisión de cuál camino tomar queda documentada en
 > [`ms-catalogo/README.md`](../ms-catalogo/README.md), sección 5.6 del plan.
 
-## 9. Frontend — S3 + CloudFront
+## 10. Frontend — mismo patrón, su propio ALB
 
-### Bucket S3
+> **Por qué no S3 + CloudFront.** Es lo que proponía el plan original (sección 6.3), pero este laboratorio de
+> AWS Academy no otorga permiso para crear Origin Access Control
+> (`cloudfront:CreateOriginAccessControl` → `AccessDenied`) — es un límite real de la cuenta, no algo que se
+> pueda resolver desde la consola. Como ECR/ECS/ALB sí funcionan sin problema (ya lo probaste con `ms-demo`),
+> el frontend se despliega igual que un microservicio más: un contenedor Nginx sirviendo el build de Vite.
 
-1. Consola → **S3 → Create bucket**. Nombre único, ej. `subastalive-frontend-<tu-account-id>`.
-2. Deja **Block all public access** activado (el bucket queda privado; lo expone CloudFront, no el bucket).
-3. **Create bucket**.
+A diferencia de `ms-demo`, el frontend de este repo **ya tiene su `Dockerfile`**
+(`frontend/Dockerfile` + `frontend/nginx.conf`) — no hace falta inventar nada, y tampoco hace falta construir
+la imagen a mano: la sube GitHub Actions la primera vez que hagas push. Lo único que armas acá es la
+infraestructura que la va a recibir.
 
-### Subir el build
+### ECR
 
-```bash
-cd frontend
-npm run build
-```
+1. Consola → **ECR → Create repository**. Nombre: `subastalive/frontend` → **Create repository**.
 
-4. En la consola de S3, entra al bucket → **Upload → Add folder**, selecciona la carpeta `frontend/dist`
-   completa (o arrastra su contenido) → **Upload**.
+### Security groups y ALB propio
 
-### Distribución de CloudFront
+El frontend necesita su **propio** ALB — el que ya tienes (`subastalive-alb`) es el que usa el API Gateway
+para llegar a los microservicios, y no queremos mezclar reglas de listener por path a esta altura.
 
-5. Consola → **CloudFront → Create distribution**.
-6. Origin domain: selecciona tu bucket S3 de la lista.
-7. Origin access: **Origin access control settings (recommended)** → **Create new OAC** → Create.
-8. Viewer protocol policy: **Redirect HTTP to HTTPS**.
-9. Default root object: `index.html`.
-10. **Create distribution**. Aparece un aviso para **actualizar la política del bucket** — haz clic en
-    **Copy policy**, ve a tu bucket S3 → **Permissions → Bucket policy → Edit**, pega la política copiada →
-    **Save changes**. Sin este paso, CloudFront no puede leer del bucket (403).
-11. Con la distribución ya creada, entra a ella → pestaña **Error pages → Create custom error response**:
-    - HTTP error code `403` → Response page path `/index.html` → HTTP response code `200`.
-    - Repite lo mismo para `404`.
+2. **EC2 → Security Groups → Create security group**: `subastalive-frontend-alb-sg`, sin reglas de entrada
+   todavía.
+3. Crea otro: `subastalive-frontend-ecs-sg`, tampoco con reglas todavía.
+4. Vuelve a `subastalive-frontend-ecs-sg` → **Inbound rules → Add rule**: Type Custom TCP, Port `80`, Source
+   **Custom** → busca `subastalive-frontend-alb-sg` → **Save**.
+5. Vuelve a `subastalive-frontend-alb-sg` → **Add rule**: Type HTTP (puerto 80), Source **Anywhere**
+   (`0.0.0.0/0`) → **Save**.
+6. **EC2 → Load Balancers → Create load balancer → Application Load Balancer**.
+   - Name: `subastalive-frontend-alb`. Scheme: **Internet-facing**.
+   - VPC: la default, subredes **públicas** (mismo criterio que `subastalive-alb`).
+   - Security group: `subastalive-frontend-alb-sg`.
+   - Listener HTTP puerto 80 → **Create target group**: Target type **IP**, Name `subastalive-tg-frontend`,
+     Protocol HTTP, Port `80`, Health check path `/`.
+   - **Create load balancer**. Copia su **DNS name** cuando quede **Active** — esa va a ser la URL pública
+     del frontend.
 
-    Sin esto, refrescar la página en una ruta interna del SPA (ej. `/subastas/123`) rompe.
-12. Copia el **Distribution domain name** y ábrelo en el navegador — debe cargar SubastaLive.
+### Task definition
 
-## 10. Conectar GitHub Actions
+7. **ECS → Task definitions → Create new task definition**.
+8. Family: `subastalive-frontend`. Launch type: **AWS Fargate**. CPU `.25 vCPU`, Memory `0.5 GB`.
+9. Task role y Task execution role: **LabRole** en ambos.
+10. Container: Name `frontend`; Image URI: `<ACCOUNT_ID>.dkr.ecr.<región>.amazonaws.com/subastalive/frontend:latest`
+    (con tu Account ID y región — la imagen todavía no existe, es la que va a subir GitHub Actions en el
+    siguiente paso; ECS recién la va a poder descargar después de eso).
+11. Port mappings: Container port `80`.
+12. Logging: deja marcada la casilla que auto-configura CloudWatch Logs.
+13. **Create**.
+
+### Service de ECS
+
+14. **ECS → Clusters → subastalive-cluster → Service → Create**.
+15. Launch type **Fargate**. Task definition `subastalive-frontend`. Service name `frontend`. Desired tasks `1`.
+16. Networking: subredes **privadas** (`subastalive-private-1a`, `subastalive-private-1b`), Security group
+    `subastalive-frontend-ecs-sg`, **Public IP: Turned OFF**.
+17. Load balancing: **Application Load Balancer** → `subastalive-frontend-alb`, listener 80, target group
+    `subastalive-tg-frontend`.
+18. **Create**.
+
+La tarea va a quedar fallando al intentar descargar la imagen (`subastalive/frontend:latest` todavía no
+existe en ECR) — es esperado, se resuelve en el paso siguiente.
+
+### Disparar el primer build desde GitHub
+
+19. Configura los Secrets y Variables de GitHub (siguiente sección, incluyendo `ECR_REPOSITORY_FRONTEND` y
+    `ECS_SERVICE_FRONTEND`).
+20. Dispara el workflow: un `git push` que toque algo en `frontend/`, o **Actions → Deploy frontend → Run
+    workflow** manualmente. Esto construye la imagen, la sube a ECR, y fuerza a ECS a re-desplegar.
+21. Espera un par de minutos — la tarea de ECS debería pasar a **Running** y el target en
+    `subastalive-tg-frontend` a **healthy**. Abre `http://<DNS-del-ALB-frontend>` en el navegador — debe
+    cargar SubastaLive.
+
+## 11. Conectar GitHub Actions
 
 Con toda la infraestructura arriba, ve al repositorio en GitHub → **Settings → Secrets and variables →
 Actions**, y carga lo siguiente (los valores salen todos de lo que ya configuraste en la consola, no hay que
@@ -358,48 +467,61 @@ inventar nada nuevo):
 | `AWS_SECRET_ACCESS_KEY` | Secret | Panel **AWS Details** del laboratorio en Canvas |
 | `AWS_SESSION_TOKEN` | Secret | Panel **AWS Details** del laboratorio en Canvas |
 | `AWS_REGION` | Variable | La región que ves arriba a la derecha en la consola (ej. `us-east-1`) |
-| `ECR_REPOSITORY_USUARIOS/CATALOGO/PUJAS` | Variable | El nombre que le pusiste al repo en ECR (paso 4) |
-| `ECS_CLUSTER` | Variable | `subastalive-cluster` (paso 5) |
-| `ECS_SERVICE_USUARIOS/CATALOGO/PUJAS` | Variable | El nombre del service de ECS (paso 6) |
-| `S3_BUCKET_FRONTEND` | Variable | El nombre del bucket (paso 9) |
-| `CLOUDFRONT_DISTRIBUTION_ID` | Variable | Pestaña General de la distribución (paso 9) |
+| `ECR_REPOSITORY_USUARIOS/CATALOGO/PUJAS` | Variable | El nombre que le pusiste al repo en ECR (sección 5) |
+| `ECS_CLUSTER` | Variable | `subastalive-cluster` (sección 6) |
+| `ECS_SERVICE_USUARIOS/CATALOGO/PUJAS` | Variable | El nombre del service de ECS (sección 7) |
+| `ECR_REPOSITORY_FRONTEND` | Variable | `subastalive/frontend` (sección 10) |
+| `ECS_SERVICE_FRONTEND` | Variable | `frontend` (sección 10) |
+| `VITE_AUTH_MODE` | Variable | `mock` para probar sin IdPs reales, `oidc` una vez que Cognito/Entra ID estén listos |
+| `VITE_USE_MOCKS` | Variable | `true` mientras los microservicios reales no existan |
+| `VITE_API_BASE_URL` | Variable | La Invoke URL del API Gateway (sección 9) — solo importa si `VITE_USE_MOCKS=false` |
+| `VITE_COGNITO_AUTHORITY`, `VITE_COGNITO_CLIENT_ID` | Variable | Del user pool de Cognito (sección 8) — solo si `VITE_AUTH_MODE=oidc` |
+| `VITE_ENTRA_AUTHORITY`, `VITE_ENTRA_CLIENT_ID` | Variable | De la app de Entra ID (sección 8) — solo si `VITE_AUTH_MODE=oidc` |
 
 A partir de acá, un `git push` a cada carpeta dispara su propio pipeline — ver la sección "CI/CD" del
 [README principal](../README.md#cicd--despliegue-automático-a-aws-github-actions).
 
-## 11. Repetirlo con los tres microservicios reales
+## 12. Repetirlo con los tres microservicios reales
 
-Todo lo de los pasos 4 a 6 se repite igual por cada microservicio real, cambiando el nombre. Una diferencia
-real de `ms-catalogo` que vale la pena anotar ahora: su contrato expone **dos** familias de rutas
+Todo lo de las secciones 5 a 7 se repite igual por cada microservicio real, cambiando el nombre. Una
+diferencia real de `ms-catalogo` que vale la pena anotar ahora: su contrato expone **dos** familias de rutas
 (`/subastas/*` y `/lotes/*`), así que en el paso de API Gateway necesitas dos rutas apuntando al mismo target
 group — no una sola, como en el ejemplo de `ms-demo`.
 
-## 12. Costos y limpieza
+## 13. Costos y limpieza
 
-AWS Academy Learner Lab tiene un tope de gasto y de tiempo por sesión. Si no vas a seguir trabajando, apaga
-en este orden (el inverso al que construiste), todo desde la consola:
+AWS Academy Learner Lab tiene un tope de gasto y de tiempo por sesión. El **NAT Gateway es el recurso que más
+corre esta cuenta silenciosamente** (cobra por hora existiendo, no solo por uso) — si no vas a seguir
+trabajando, apaga en este orden (el inverso al que construiste), todo desde la consola:
 
-1. **ECS** → Service `ms-demo` → **Update service** → Desired tasks `0` → guarda, espera, luego
-   **Delete service**. Después, **Delete cluster**.
-2. **EC2 → Load Balancers** → selecciona `subastalive-alb` → **Delete**. Luego **Target Groups** →
-   `subastalive-tg-demo` → **Delete**.
-3. **CloudFront** → selecciona la distribución → **Disable** → espera a que despliegue (unos minutos) →
-   recién ahí **Delete**. No se puede borrar una distribución activa.
-4. **S3** → vacía el bucket (**Empty**) → luego **Delete bucket**.
-5. **API Gateway** → selecciona la API → **Delete**.
-6. **RDS** → selecciona `subastalive-db` → **Actions → Delete** → desmarca "Create final snapshot" →
+1. **ECS** → cada Service (`ms-demo`, `frontend`, y los reales que hayas creado) → **Update service** →
+   Desired tasks `0` → guarda, espera, luego **Delete service**. Después, **Delete cluster**.
+2. **EC2 → Load Balancers** → borra `subastalive-alb` y `subastalive-frontend-alb`. Luego **Target Groups**
+   → borra `subastalive-tg-demo` y `subastalive-tg-frontend` (y los de los microservicios reales).
+3. **API Gateway** → selecciona la API → **Delete**.
+4. **RDS** → selecciona `subastalive-db` → **Actions → Delete** → desmarca "Create final snapshot" →
    confirma escribiendo `delete me`.
-7. **Cognito** → selecciona el user pool → **Delete user pool**.
-8. **EC2 → Security Groups** → borra `subastalive-alb-sg` y `subastalive-ecs-sg` (una vez que nada los use).
-9. **ECR** — opcional: borra los repositorios si no los vas a seguir usando.
+5. **Cognito** → selecciona el user pool → **Delete user pool**.
+6. **VPC → NAT Gateways** → selecciona `subastalive-nat` → **Delete** (tarda unos minutos).
+7. **VPC → Elastic IPs** → **Release** la que se usó para el NAT (una vez borrado, ya no está asociada, pero
+   sigue existiendo — y las IPs elásticas sin usar también tienen costo).
+8. **VPC → Route Tables** → borra `subastalive-private-rt`.
+9. **VPC → Subnets** → borra `subastalive-private-1a` y `subastalive-private-1b`.
+10. **EC2 → Security Groups** → borra todos los `subastalive-*-sg` (una vez que nada los use).
+11. **ECR** — opcional: borra los repositorios si no los vas a seguir usando.
+
+La próxima vez que retomes, repites la sección 2 (subredes + NAT) y la sección 3 sin volver a aplicar nada
+manualmente — si borraste RDS, la próxima vez que despliegues cada microservicio, Flyway vuelve a crear su
+esquema solo.
 
 ## Checklist final
 
-- [ ] RDS arriba, con los tres esquemas creados y verificados en pgAdmin
-- [ ] Imagen `ms-demo` construida, en ECR, corriendo en ECS
+- [ ] VPC con 2 subredes privadas y NAT Gateway `Available`
+- [ ] RDS sin acceso público, sin ninguna regla de entrada abierta salvo la de `subastalive-ecs-sg`
+- [ ] Imagen `ms-demo` construida, en ECR, corriendo en ECS en subred privada (sin IP pública)
 - [ ] El DNS del ALB responde `ms-demo OK` en el navegador
 - [ ] La Invoke URL del API Gateway da 401 sin token (visto en DevTools) y 200 con el `id_token` de Cognito (visto en Postman)
 - [ ] Usuario de prueba creado en Cognito; app registrada y roles creados en Entra ID
-- [ ] Frontend compilado y subido a S3; CloudFront lo sirve y sobrevive un refresh en ruta interna
+- [ ] Frontend corriendo en ECS detrás de su propio ALB; abre en el navegador y sobrevive un refresh en ruta interna
 - [ ] Secrets y Variables cargados en GitHub; un push dispara el workflow correspondiente
-- [ ] Sabes en qué orden apagar todo cuando termines
+- [ ] Sabes en qué orden apagar todo cuando termines (empezando por el NAT Gateway)

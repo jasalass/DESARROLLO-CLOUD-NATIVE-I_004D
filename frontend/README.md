@@ -93,8 +93,15 @@ absolutas sobre `VITE_API_BASE_URL`.
 
 ## Despliegue
 
-Se despliega como sitio estático (S3 + CloudFront), no como contenedor — ver la sección "CI/CD — despliegue
-automático a AWS" del [README principal](../README.md#cicd--despliegue-automático-a-aws-github-actions) para
-el detalle completo del pipeline ([`../.github/workflows/deploy-frontend.yml`](../.github/workflows/deploy-frontend.yml)),
-los prerrequisitos de infraestructura (bucket S3, distribución CloudFront con OAC, manejo de rutas de SPA) y
-los Secrets/Variables necesarios en GitHub.
+Se despliega como **contenedor en ECS/Fargate**, igual que los tres microservicios (no como sitio estático en
+S3+CloudFront — se cambió porque el laboratorio de AWS Academy usado en este proyecto no permite crear Origin
+Access Control de CloudFront). El `Dockerfile` de esta carpeta hace el build de Vite en una etapa y sirve el
+resultado con Nginx (`nginx.conf` incluye el `try_files` necesario para que las rutas de React Router
+funcionen al refrescar la página).
+
+Como las variables `VITE_*` se incrustan en el bundle en tiempo de build (no son variables de entorno del
+contenedor en ejecución), se pasan como `--build-arg` — ver
+[`../.github/workflows/deploy-frontend.yml`](../.github/workflows/deploy-frontend.yml). El resto del pipeline,
+los prerrequisitos de infraestructura y los Secrets/Variables de GitHub están en la sección "CI/CD" del
+[README principal](../README.md#cicd--despliegue-automático-a-aws-github-actions) y en
+[`../docs/despliegue-aws.md`](../docs/despliegue-aws.md).

@@ -4,9 +4,10 @@ Plataforma cloud native de subastas en línea. Proyecto de la asignatura DSY1107
 
 El plan de proyecto completo, con historias de usuario, requisitos y arquitectura por etapa, está en [`docs/SubastaLive_Plan_de_Proyecto_v3.pdf`](docs/SubastaLive_Plan_de_Proyecto_v3.pdf).
 
-Para levantar toda la infraestructura de la Etapa 1 en AWS desde cero (RDS, ECR, ECS, ALB, Cognito, Entra ID,
-API Gateway y el frontend en S3+CloudFront), sigue [`docs/despliegue-aws.md`](docs/despliegue-aws.md) — está
-pensada para que cada persona del equipo la haga una vez en su propio laboratorio.
+Para levantar toda la infraestructura de la Etapa 1 en AWS desde cero (red privada, RDS, ECR, ECS, ALB,
+Cognito, Entra ID, API Gateway y el frontend — también como contenedor en ECS), sigue
+[`docs/despliegue-aws.md`](docs/despliegue-aws.md) — está pensada para que cada persona del equipo la haga
+una vez en su propio laboratorio.
 
 ## Estructura del monorepo
 
@@ -163,57 +164,52 @@ docker compose down -v    # detiene todo y borra el volumen (reinicia la base de
 
 ## CI/CD — despliegue automático a AWS (GitHub Actions)
 
-Hay cuatro workflows en [`.github/workflows/`](.github/workflows/), uno por cada parte desplegable del
-monorepo, y cada uno se activa **solo** por cambios en su propia carpeta — se despliegan de forma
-independiente entre sí, consistente con que cada pieza escala y se despliega por separado (RNF-01).
+Hay cuatro workflows en [`.github/workflows/`](.github/workflows/) — uno por microservicio más uno para el
+frontend — y **todos siguen exactamente el mismo patrón** (build → ECR → ECS), sin distinción entre backend y
+frontend. Cada uno se activa **solo** por cambios en su propia carpeta, así que las cuatro partes se
+despliegan de forma independiente entre sí, consistente con que cada una escala por separado (RNF-01).
 
-### Microservicios (`deploy-ms-usuarios.yml`, `deploy-ms-catalogo.yml`, `deploy-ms-pujas.yml`)
+> **Nota de diseño:** el plan original (sección 6.3) proponía el frontend como sitio estático en S3 +
+> CloudFront. Se cambió a ECS/Fargate como los microservicios porque el laboratorio de AWS Academy usado para
+> este proyecto no otorga permiso para crear Origin Access Control ni algunas otras piezas de CloudFront
+> (`cloudfront:CreateOriginAccessControl` da `AccessDenied`), mientras que ECR/ECS/ALB sí funcionan sin
+> problema en esta cuenta. El frontend termina siendo, literalmente, "otro contenedor" — un Nginx sirviendo el
+> build de Vite — desplegado igual que los tres microservicios.
 
-Al hacer push a `main` que toque archivos dentro de la carpeta de un microservicio (o disparándolo a mano
-desde la pestaña **Actions** de GitHub):
+### Los cuatro workflows (`deploy-ms-usuarios.yml`, `deploy-ms-catalogo.yml`, `deploy-ms-pujas.yml`, `deploy-frontend.yml`)
 
-1. Construye la imagen Docker del servicio (`docker build ./ms-x`).
+Al hacer push a `main` que toque archivos dentro de la carpeta correspondiente (o disparándolo a mano desde
+la pestaña **Actions** de GitHub):
+
+1. Construye la imagen Docker (`docker build ./ms-x` o `./frontend`). Para el frontend, el `Dockerfile` hace
+   el build de Vite en una etapa y sirve el resultado con Nginx en la siguiente; las variables `VITE_*` se
+   pasan como `--build-arg` porque Vite las incrusta en el bundle en tiempo de build, no son variables de
+   entorno del contenedor en ejecución.
 2. La sube a **Amazon ECR**, con dos tags: el SHA del commit (trazabilidad/rollback) y `latest`.
 3. Ejecuta `aws ecs update-service --force-new-deployment` sobre el servicio de **ECS** correspondiente, que
    vuelve a desplegar la tarea tirando la imagen `latest` recién publicada.
 
-**Importante:** el workflow asume que ya existe un `Dockerfile` en la carpeta del microservicio. Hasta que
-alguien lo agregue, el workflow existe pero fallará si se dispara (no hay nada que construir) — es
-intencional, queda listo para activarse solo cuando el servicio tenga código.
+**Importante:** cada workflow asume que ya existe un `Dockerfile` en su carpeta. El de `frontend/` ya está en
+el repo; los de los microservicios se agregan cuando cada uno tenga código — hasta entonces, el workflow
+existe pero falla si se dispara (no hay nada que construir), es intencional.
 
-### Frontend (`deploy-frontend.yml`)
+### Prerrequisitos de infraestructura (manuales, una sola vez, por cada una de las 4 partes)
 
-El frontend no va a ECS/ECR: se despliega como **sitio estático en S3, servido a través de CloudFront**
-(sección 6.3 del plan). Al hacer push a `main` que toque `frontend/**`:
+Debe existir en AWS, para `ms-usuarios`, `ms-catalogo`, `ms-pujas` **y** `frontend`:
 
-1. Instala dependencias (`npm ci`) y genera el build de producción (`npm run build`, que deja los archivos
-   estáticos en `frontend/dist/`).
-2. Sincroniza `dist/` al bucket S3 con `aws s3 sync --delete` (sube lo nuevo/cambiado, borra lo que ya no
-   está).
-3. Si hay una distribución de CloudFront configurada, invalida su caché (`aws cloudfront create-invalidation
-   --paths "/*"`) para que dejen de servirse versiones viejas cacheadas.
+1. **Un repositorio en Amazon ECR** (ej. `subastalive/ms-usuarios`, ..., `subastalive/frontend`).
+2. **Un cluster de ECS** (uno solo, compartido por las cuatro) y, dentro de él, **una task definition + un
+   service por cada una**, con el contenedor apuntando a `<ECR_REGISTRY>/<repositorio>:latest` — el workflow
+   no crea ni actualiza la task definition, solo fuerza a ECS a re-halar la imagen `latest`.
+3. Un **Application Load Balancer** con su target group. Los tres microservicios quedan detrás del API
+   Gateway (que enruta hacia el ALB, sección 5.1 del plan); el frontend tiene su **propio** ALB — más simple
+   que mezclar reglas de listener por path en uno solo.
 
-Este paso 3 se salta automáticamente si no se define la variable `CLOUDFRONT_DISTRIBUTION_ID` (por ejemplo,
-mientras se prueba solo con el bucket S3 sin CDN delante todavía).
-
-### Prerrequisitos de infraestructura (manuales, una sola vez)
-
-**Para cada microservicio**, debe existir en AWS:
-
-1. **Un repositorio en Amazon ECR** (ej. `subastalive/ms-usuarios`, `subastalive/ms-catalogo`, `subastalive/ms-pujas`).
-2. **Un cluster de ECS** (puede ser uno solo, compartido por los tres servicios) y, dentro de él, **una task definition + un service de ECS por microservicio**, con el contenedor de la task definition apuntando a `<ECR_REGISTRY>/<repositorio>:latest` — el workflow no crea ni actualiza la task definition, solo fuerza a ECS a re-halar la imagen `latest`.
-3. Un **Application Load Balancer** y su target group asociados al service de ECS (para que el API Gateway pueda enrutar hacia él), según la sección 5.1 del plan.
-
-**Para el frontend:**
-
-1. **Un bucket S3** para alojar los archivos estáticos — recomendado **privado**, sin acceso público directo.
-2. **Una distribución de CloudFront** con el bucket como origen, usando **Origin Access Control (OAC)** para
-   que solo CloudFront pueda leer del bucket (nadie llega directo al S3).
-3. **Manejo de rutas de SPA:** como el ruteo lo resuelve React Router en el cliente, hay que configurar en
-   CloudFront una *custom error response* que mapee `403` y `404` a `/index.html` con status `200` — si no,
-   refrescar la página en una ruta interna (ej. `/subastas/123`) rompe con error en vez de cargar la app.
-4. (Opcional, recomendado) Certificado en **ACM** + dominio propio si se quiere servir bajo un dominio propio
-   en vez de la URL default de CloudFront.
+**Red:** las tareas de ECS y RDS viven en **subredes privadas** (sin IP pública ni acceso directo desde
+internet); solo los ALB están en subredes públicas. Esto exige además un **NAT Gateway** para que las tareas
+puedan descargar su imagen de ECR. RDS no tiene ninguna vía de administración manual — cada microservicio
+crea y actualiza su propio esquema al arrancar, con Flyway (ver [`db/README.md`](db/README.md)). El detalle
+completo, con los CIDR y el orden exacto, está en [`docs/despliegue-aws.md`](docs/despliegue-aws.md).
 
 ### Secrets y Variables que hay que configurar en GitHub
 
@@ -234,8 +230,13 @@ leerlos sin exponerlos como secretos innecesariamente.
 | `ECS_SERVICE_USUARIOS` | Variable | Nombre del service de ECS de `ms-usuarios` |
 | `ECS_SERVICE_CATALOGO` | Variable | Nombre del service de ECS de `ms-catalogo` |
 | `ECS_SERVICE_PUJAS` | Variable | Nombre del service de ECS de `ms-pujas` |
-| `S3_BUCKET_FRONTEND` | Variable | Nombre del bucket S3 donde se sube el build del frontend |
-| `CLOUDFRONT_DISTRIBUTION_ID` | Variable | ID de la distribución de CloudFront a invalidar (dejar vacía/sin crear si aún no hay CDN delante del bucket) |
+| `ECR_REPOSITORY_FRONTEND` | Variable | Nombre del repositorio ECR del frontend |
+| `ECS_SERVICE_FRONTEND` | Variable | Nombre del service de ECS del frontend |
+| `VITE_AUTH_MODE` | Variable | `mock` u `oidc` — ver [`frontend/README.md`](frontend/README.md) |
+| `VITE_USE_MOCKS` | Variable | `true` o `false` |
+| `VITE_API_BASE_URL` | Variable | URL del API Gateway (solo importa si `VITE_USE_MOCKS=false`) |
+| `VITE_COGNITO_AUTHORITY`, `VITE_COGNITO_CLIENT_ID` | Variable | Solo si `VITE_AUTH_MODE=oidc` |
+| `VITE_ENTRA_AUTHORITY`, `VITE_ENTRA_CLIENT_ID` | Variable | Solo si `VITE_AUTH_MODE=oidc` |
 
 El registro de ECR (`ECR_REGISTRY`, con forma `<id-de-cuenta>.dkr.ecr.<region>.amazonaws.com`) no se configura
 a mano: la acción `aws-actions/amazon-ecr-login` lo resuelve automáticamente a partir de las credenciales.
@@ -263,9 +264,9 @@ de un día para otro en este tipo de laboratorio.
 
 - **Automático:** `git push` a `main` con cambios dentro de `ms-usuarios/`, `ms-catalogo/`, `ms-pujas/` o `frontend/`.
 - **Manual:** pestaña **Actions** del repositorio → elegir el workflow correspondiente → **Run workflow**.
-- **Seguimiento:** pestaña **Actions** para ver el log del pipeline; para los microservicios, consola de ECS
-  (o CloudWatch Logs de la task definition) para ver si el contenedor nuevo levantó bien; para el frontend,
-  la URL de CloudFront (o del bucket) directamente.
+- **Seguimiento:** pestaña **Actions** para ver el log del pipeline; consola de ECS (o CloudWatch Logs de la
+  task definition) para ver si el contenedor nuevo levantó bien; el DNS del ALB del frontend directamente en
+  el navegador.
 
 ## Cómo levantar cada parte
 
