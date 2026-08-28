@@ -1,13 +1,19 @@
-# Despliegue de SubastaLive en AWS — guía paso a paso
+# Despliegue de SubastaLive en AWS — guía paso a paso (consola web)
 
 Esta guía levanta, desde cero y en una sola cuenta de AWS Academy, toda la infraestructura de la **Etapa 1**:
 base de datos, cómputo en contenedores, balanceo de carga, identidad federada, puerta de entrada con
 validación de JWT, y el frontend como sitio estático.
 
+**Todo se configura en el portal web de AWS (y el portal de Azure para Entra ID) — no se usa la CLI de AWS
+en ningún paso.** Los únicos comandos de terminal que vas a necesitar son los normales de Docker (para
+construir la imagen) y de npm (para compilar el frontend); nada de `aws ec2 ...`, `aws ecs ...`, etc. Esos
+comandos sí existen, pero los ejecuta **GitHub Actions por ti** una vez que dejes cargados los Secrets —
+tú no los escribes.
+
 ## Por qué cada uno despliega todo
 
 Es tentador dividir el trabajo así: "yo hago el backend, tú el front, alguien más sube todo a AWS al final".
-Ese reparto deja a dos de cada tres personas del equipo sin haber tocado nunca una consola de AWS — y en la
+Ese reparto deja a dos de cada tres personas del equipo sin haber tocado nunca la consola de AWS — y en la
 presentación de la pauta, cualquiera puede tener que explicar por qué el API Gateway valida el JWT antes de
 llegar al ALB, o por qué RDS tiene un esquema por servicio.
 
@@ -19,21 +25,23 @@ JWT y un User Pool de Cognito con sus propias manos — no solo lo vieron en un 
 
 ## Antes de empezar
 
-Instala esto en tu máquina antes de arrancar el laboratorio:
+Instala esto en tu máquina:
 
-- **AWS CLI v2** — `aws --version` debe responder.
-- **Docker Desktop** — para construir y probar la imagen de práctica.
-- **psql** (cliente de PostgreSQL) — para aplicar los scripts de esquema contra RDS.
-- **Node.js 20+** — para el build del frontend.
+- **Docker Desktop** — para construir la imagen de práctica (esto sí abre una terminal, es inevitable).
+- **pgAdmin** o **DBeaver** (cliente de base de datos con interfaz gráfica) — para aplicar los scripts de
+  esquema contra RDS sin usar la línea de comandos.
+- **Postman** (o Insomnia) — para probar el API Gateway con un token, sin usar `curl`.
+- **Node.js 20+** — para el build del frontend (`npm run build`).
 - El repositorio de SubastaLive clonado localmente.
 
 > **Específico de AWS Academy Learner Lab.** No puedes crear roles ni políticas IAM — la cuenta ya trae uno
-> preparado llamado `LabRole`, y es el que vas a usar en todos los lugares donde ECS/RDS/Lambda pidan un rol.
-> Intentar `aws iam create-role` falla con `AccessDenied`: es esperado, no un error tuyo.
+> preparado llamado `LabRole`, y es el que vas a elegir en todos los menús desplegables donde ECS pida un
+> rol. Si un asistente te deja escribir un nombre de rol nuevo y falla con "not authorized", es porque
+> intentaste crear uno — busca `LabRole` en la lista en vez de escribir uno.
 >
-> La sesión del laboratorio dura unas horas y las credenciales (access key, secret key y **session token**)
-> expiran con ella. Si un comando empieza a fallar con errores de autenticación a mitad de la guía, lo
-> primero que hay que revisar es si el laboratorio se venció.
+> La sesión del laboratorio dura unas horas y las credenciales que le vas a pasar a GitHub expiran con ella.
+> Si un despliegue automático empieza a fallar de un día para otro, lo primero que hay que revisar es si el
+> laboratorio se venció (hay que volver a Canvas, reiniciarlo, y actualizar los Secrets en GitHub).
 
 ## El mapa completo
 
@@ -68,83 +76,56 @@ flowchart TB
   MSP -->|"schema_pujas"| RDS
 ```
 
-El navegador carga el SPA desde CloudFront/S3, se autentica contra Cognito o Entra ID según el rol, y cada
-llamada a la API lleva el JWT que primero valida el API Gateway (firma, issuer, audiencia) y luego cada
-microservicio otra vez, antes de tocar su propio esquema en RDS.
+## 1. Entrar a la consola de AWS
 
-## 1. Arrancar el laboratorio y la CLI
+En Canvas, abre el laboratorio (AWS Academy Learner Lab). Cuando el círculo se ponga verde, haz clic en el
+botón **AWS** (no en "AWS Details" todavía) — te abre la consola web de AWS ya autenticada, sin pedirte
+usuario ni contraseña. Todo lo que sigue ocurre ahí, en el navegador.
 
-En Canvas, entra al laboratorio (AWS Academy Learner Lab) y ábrelo. Cuando el círculo se ponga verde, haz
-clic en **AWS Details** y copia las credenciales a `~/.aws/credentials`:
+Anota, mirando la esquina superior derecha de la consola:
 
-```ini
-[default]
-aws_access_key_id = ASIA...
-aws_secret_access_key = ...
-aws_session_token = ...
-```
+- La **región** activa (normalmente `us-east-1` — si no es esa, elígela ahí para todo lo que sigue).
+- Tu **Account ID**, haciendo clic en el nombre de la cuenta en esa misma esquina.
 
-Verifica que la CLI quedó autenticada y anota tu Account ID y región:
-
-```bash
-aws sts get-caller-identity
-export AWS_REGION=us-east-1
-export ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-echo $ACCOUNT_ID
-```
-
-Vas a reutilizar `$ACCOUNT_ID` y `$AWS_REGION` en casi todos los comandos siguientes de esta guía.
+Vas a necesitar ambos datos más adelante para las URLs de ECR y de los issuers de Cognito.
 
 ## 2. Base de datos — Amazon RDS
 
-Todo lo demás depende de que esto exista primero. Crea la instancia:
+Todo lo demás depende de que esto exista primero.
 
-```bash
-aws rds create-db-instance \
-  --db-instance-identifier subastalive-db \
-  --db-instance-class db.t3.micro \
-  --engine postgres \
-  --engine-version 16.4 \
-  --master-username subastalive \
-  --master-user-password 'CambiaEstaClave123' \
-  --allocated-storage 20 \
-  --storage-type gp3 \
-  --publicly-accessible \
-  --backup-retention-period 0
+1. En la barra de búsqueda de la consola, ve a **RDS → Create database**.
+2. Método de creación: **Standard create**.
+3. Motor: **PostgreSQL**, versión 16.x (la más reciente que ofrezca).
+4. Templates: **Free tier** (si aparece disponible) o **Dev/Test**.
+5. Settings: DB instance identifier `subastalive-db`; Master username `subastalive`; define una master
+   password y anótala (o deja que RDS la genere y la copias al final desde "View credential details").
+6. Instance configuration: la clase más pequeña disponible, `db.t3.micro`.
+7. Storage: 20 GiB, tipo gp3.
+8. Connectivity: "Don't connect to an EC2 compute resource"; VPC: la default; **Public access: Yes**; VPC
+   security group: **Create new**, nómbralo `subastalive-rds-sg`.
+9. Additional configuration → Initial database name: `subastalive` (anota el nombre que elijas, lo vas a
+   necesitar al conectarte).
+10. **Create database**. Espera a que el estado pase a **Available** (5–10 minutos).
+11. Entra a la instancia → pestaña **Connectivity & security** → copia el **Endpoint**.
 
-aws rds wait db-instance-available --db-instance-identifier subastalive-db
+Ábrele el puerto solo a tu propia IP, no al mundo:
 
-export DB_ENDPOINT=$(aws rds describe-db-instances \
-  --db-instance-identifier subastalive-db \
-  --query "DBInstances[0].Endpoint.Address" --output text)
-echo $DB_ENDPOINT
-```
+12. Ve a **EC2 → Security Groups**, busca `subastalive-rds-sg`.
+13. Pestaña **Inbound rules → Edit inbound rules → Add rule**: Type `PostgreSQL`, Source: **My IP** → **Save
+    rules**.
 
-El `--publicly-accessible` es una simplificación de laboratorio: te deja aplicar los scripts de esquema desde
-tu laptop sin una VPN ni un bastión. Ábrele el puerto 5432 solo a tu IP, no al mundo:
+### Aplicar los esquemas con pgAdmin (sin línea de comandos)
 
-```bash
-export MY_IP=$(curl -s https://checkip.amazonaws.com)
-export DEFAULT_SG=$(aws ec2 describe-security-groups \
-  --filters Name=group-name,Values=default \
-  --query "SecurityGroups[0].GroupId" --output text)
-
-aws ec2 authorize-security-group-ingress \
-  --group-id $DEFAULT_SG --protocol tcp --port 5432 \
-  --cidr ${MY_IP}/32
-```
-
-Con el endpoint listo, aplica los tres esquemas del repo (`db/schema_usuarios`, `db/schema_catalogo`,
-`db/schema_pujas` — ver [`db/README.md`](../db/README.md)):
-
-```bash
-export PGPASSWORD='CambiaEstaClave123'
-for f in db/schema_usuarios/V1__init.sql db/schema_catalogo/V1__init.sql db/schema_pujas/V1__init.sql; do
-  psql "host=$DB_ENDPOINT port=5432 dbname=postgres user=subastalive sslmode=require" -f "$f"
-done
-```
-
-**Verificación:** `psql "host=$DB_ENDPOINT ..." -c "\dn"` debe listar los tres esquemas.
+14. Abre pgAdmin → clic derecho en **Servers → Register → Server**.
+15. Pestaña **General**: nombre `subastalive`. Pestaña **Connection**: Host = el Endpoint copiado, Port
+    `5432`, Maintenance database = el nombre que elegiste (o `postgres`), Username `subastalive`, Password la
+    que definiste → **Save**.
+16. Con el servidor conectado, abre el **Query Tool** (ícono de rayo, o clic derecho → Query Tool).
+17. Abre en tu editor de texto `db/schema_usuarios/V1__init.sql`, copia todo su contenido, pégalo en el Query
+    Tool y ejecútalo (▶ o F5).
+18. Repite con `db/schema_catalogo/V1__init.sql` y `db/schema_pujas/V1__init.sql`.
+19. En el panel izquierdo de pgAdmin, expande **Databases → (tu base) → Schemas** — deben aparecer
+    `schema_usuarios`, `schema_catalogo` y `schema_pujas`.
 
 ## 3. Una imagen para practicar el pipeline
 
@@ -171,186 +152,115 @@ Pruébala en local antes de subirla a ningún lado:
 ```bash
 docker build -t ms-demo .
 docker run --rm -p 8080:8080 ms-demo
-curl http://localhost:8080
 ```
+
+Abre `http://localhost:8080` en el navegador — debe mostrar "ms-demo OK".
 
 ## 4. Registro de imágenes — Amazon ECR
 
-```bash
-aws ecr create-repository --repository-name subastalive/ms-demo
+1. Consola → **ECR → Create repository**. Nombre: `subastalive/ms-demo` → **Create repository**.
+2. Entra al repositorio recién creado y haz clic en **View push commands** (arriba a la derecha).
+3. AWS te muestra 4 líneas ya armadas con tu Account ID y región correctos — cópialas y pégalas en tu
+   terminal, en orden: login a ECR, build, tag, push.
 
-aws ecr get-login-password --region $AWS_REGION | docker login \
-  --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
-
-docker tag ms-demo:latest \
-  $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/subastalive/ms-demo:latest
-
-docker push $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/subastalive/ms-demo:latest
-```
-
-Esta secuencia — build, tag, push — es exactamente lo que hace el workflow `deploy-ms-pujas.yml` por ti más
-adelante.
+No hace falta escribir esos comandos a mano ni recordar la URL del registro — la consola los arma por ti.
 
 ## 5. Cómputo — ECS con Fargate
 
-Cluster y red primero:
+### Cluster
 
-```bash
-aws ecs create-cluster --cluster-name subastalive-cluster
+1. Consola → **ECS → Clusters → Create cluster**.
+2. Nombre: `subastalive-cluster`. Infraestructura: **AWS Fargate (serverless)** → **Create**.
 
-export VPC_ID=$(aws ec2 describe-vpcs --filters Name=isDefault,Values=true \
-  --query "Vpcs[0].VpcId" --output text)
-export SUBNETS=$(aws ec2 describe-subnets --filters Name=vpc-id,Values=$VPC_ID \
-  --query "Subnets[].SubnetId" --output text | tr '\t' ',')
-echo $VPC_ID $SUBNETS
-```
+### Security groups
 
-Dos security groups: uno para el ALB (público) y otro para las tareas de ECS (solo desde el ALB):
+Antes de la task definition, crea dos grupos de seguridad (**EC2 → Security Groups → Create security
+group**):
 
-```bash
-export ALB_SG=$(aws ec2 create-security-group --group-name subastalive-alb-sg \
-  --description "ALB SubastaLive" --vpc-id $VPC_ID --query GroupId --output text)
-export ECS_SG=$(aws ec2 create-security-group --group-name subastalive-ecs-sg \
-  --description "ECS tasks SubastaLive" --vpc-id $VPC_ID --query GroupId --output text)
+- `subastalive-alb-sg`: sin reglas de entrada todavía (se las agregas en el paso del ALB).
+- `subastalive-ecs-sg`: sin reglas de entrada todavía (se las agregas después de crear `subastalive-alb-sg`,
+  porque la regla apunta *a ese* security group como origen).
 
-aws ec2 authorize-security-group-ingress --group-id $ALB_SG \
-  --protocol tcp --port 80 --cidr 0.0.0.0/0
-aws ec2 authorize-security-group-ingress --group-id $ECS_SG \
-  --protocol tcp --port 8080 --source-group $ALB_SG
+Vuelve a `subastalive-ecs-sg` → **Inbound rules → Add rule**: Type Custom TCP, Port `8080`, Source: elige
+**Custom** y busca `subastalive-alb-sg` en el desplegable → **Save**.
 
-# y deja que las tareas de ECS también lleguen a la base de datos
-aws ec2 authorize-security-group-ingress --group-id $DEFAULT_SG \
-  --protocol tcp --port 5432 --source-group $ECS_SG
-```
+Edita también `subastalive-rds-sg` (el que creó RDS) → **Add rule**: Type PostgreSQL, Source: `subastalive-ecs-sg` → **Save** — así las tareas de ECS pueden llegar a la base de datos.
 
-> **Rol de ejecución: usa LabRole.** No crees un rol nuevo — no tienes permiso. Usa el que ya existe:
->
-> ```bash
-> export LAB_ROLE_ARN=$(aws iam get-role --role-name LabRole --query Role.Arn --output text)
-> ```
+### Task definition
 
-Ahora la task definition:
-
-```json
-// task-def-ms-demo.json
-{
-  "family": "subastalive-ms-demo",
-  "networkMode": "awsvpc",
-  "requiresCompatibilities": ["FARGATE"],
-  "cpu": "256",
-  "memory": "512",
-  "executionRoleArn": "<LAB_ROLE_ARN>",
-  "taskRoleArn": "<LAB_ROLE_ARN>",
-  "containerDefinitions": [{
-    "name": "ms-demo",
-    "image": "<ACCOUNT_ID>.dkr.ecr.<AWS_REGION>.amazonaws.com/subastalive/ms-demo:latest",
-    "portMappings": [{ "containerPort": 8080, "protocol": "tcp" }],
-    "logConfiguration": {
-      "logDriver": "awslogs",
-      "options": {
-        "awslogs-group": "/ecs/subastalive-ms-demo",
-        "awslogs-region": "<AWS_REGION>",
-        "awslogs-stream-prefix": "ecs",
-        "awslogs-create-group": "true"
-      }
-    }
-  }]
-}
-```
-
-`"awslogs-create-group": "true"` deja que ECS cree el log group solo — sin esto, la tarea puede fallar en
-silencio si el grupo no existe todavía.
-
-```bash
-aws ecs register-task-definition --cli-input-json file://task-def-ms-demo.json
-```
+1. **ECS → Task definitions → Create new task definition**.
+2. Family: `subastalive-ms-demo`. Launch type: **AWS Fargate**.
+3. CPU: `.25 vCPU`, Memory: `0.5 GB`.
+4. Task role y Task execution role: busca y selecciona **LabRole** en ambos desplegables — no escribas un
+   nombre nuevo.
+5. Container details: Name `ms-demo`; Image URI: pégala desde ECR (en el repo, botón **Copy URI**, agrégale
+   `:latest` al final).
+6. Port mappings: Container port `8080`, Protocol TCP.
+7. En la sección de logging, deja marcada la casilla que auto-configura CloudWatch Logs (según la versión de
+   consola puede decir "Use log collection" o similar) — así no falla por falta de un log group que no
+   existe todavía.
+8. **Create**.
 
 ## 6. Balanceador — Application Load Balancer
 
-```bash
-export ALB_ARN=$(aws elbv2 create-load-balancer --name subastalive-alb \
-  --subnets $(echo $SUBNETS | tr ',' ' ') --security-groups $ALB_SG \
-  --scheme internet-facing --type application \
-  --query "LoadBalancers[0].LoadBalancerArn" --output text)
+1. **EC2 → Load Balancers → Create load balancer → Application Load Balancer**.
+2. Name: `subastalive-alb`. Scheme: **Internet-facing**.
+3. VPC: la default. Mappings: selecciona al menos 2 zonas de disponibilidad con su subred.
+4. Security groups: `subastalive-alb-sg` (quita el "default" si aparece preseleccionado).
+5. Listeners: HTTP puerto 80 → Default action: **Create target group**.
+   - Target type: **IP**. Name: `subastalive-tg-demo`. Protocol HTTP, Port `8080`. VPC: la default.
+   - Health check path: `/`.
+   - **Next → Create target group**, y de vuelta en el asistente del ALB, selecciónalo como destino del
+     listener.
+6. Vuelve a `subastalive-alb-sg` → **Inbound rules → Add rule**: Type HTTP (puerto 80), Source **Anywhere**
+   (`0.0.0.0/0`) → **Save**.
+7. **Create load balancer**. Cuando el estado sea **Active**, copia su **DNS name** (pestaña Description).
 
-export TG_ARN=$(aws elbv2 create-target-group --name subastalive-tg-demo \
-  --protocol HTTP --port 8080 --vpc-id $VPC_ID --target-type ip \
-  --health-check-path / \
-  --query "TargetGroups[0].TargetGroupArn" --output text)
+### Service de ECS
 
-aws elbv2 create-listener --load-balancer-arn $ALB_ARN \
-  --protocol HTTP --port 80 \
-  --default-actions Type=forward,TargetGroupArn=$TG_ARN
-```
+1. **ECS → Clusters → subastalive-cluster → Service → Create**.
+2. Launch type: **Fargate**. Task definition: `subastalive-ms-demo`. Service name: `ms-demo`. Desired tasks: `1`.
+3. Networking: VPC default, mismas subredes que el ALB, Security group: `subastalive-ecs-sg`.
+4. **Public IP: Turned ON.**
+5. Load balancing: **Application Load Balancer** → selecciona `subastalive-alb`, listener 80, target group
+   `subastalive-tg-demo`.
+6. **Create**.
 
-Ahora sí, el ECS Service que conecta la task definition con el target group:
+> **Sin esto, la tarea no arranca.** Los laboratorios de Academy normalmente no traen un NAT Gateway. Si el
+> "Public IP" queda apagado, la tarea no tiene salida a internet para descargar la imagen desde ECR y falla
+> con `CannotPullContainerError` — este es el error más común al seguir esta guía.
 
-```bash
-aws ecs create-service \
-  --cluster subastalive-cluster \
-  --service-name ms-demo \
-  --task-definition subastalive-ms-demo \
-  --desired-count 1 \
-  --launch-type FARGATE \
-  --network-configuration "awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$ECS_SG],assignPublicIp=ENABLED}" \
-  --load-balancers "targetGroupArn=$TG_ARN,containerName=ms-demo,containerPort=8080"
-```
-
-> **Sin NAT gateway, sin imagen.** Los laboratorios de Academy normalmente no traen un NAT Gateway. Sin
-> `assignPublicIp=ENABLED`, la tarea no tiene salida a internet para descargar la imagen de ECR y falla con
-> `CannotPullContainerError`.
-
-Espera un par de minutos y prueba directo contra el ALB, sin pasar todavía por el API Gateway:
-
-```bash
-export ALB_DNS=$(aws elbv2 describe-load-balancers --load-balancer-arns $ALB_ARN \
-  --query "LoadBalancers[0].DNSName" --output text)
-curl http://$ALB_DNS
-```
+Espera un par de minutos (el estado de la tarea debe llegar a **Running**, y el target en el target group a
+**healthy**) y abre `http://<DNS-del-ALB>` en el navegador — debe mostrar "ms-demo OK".
 
 ## 7. Identidad — Cognito y Entra ID
 
 ### Amazon Cognito (postores)
 
-```bash
-export POOL_ID=$(aws cognito-idp create-user-pool --pool-name subastalive-postores \
-  --auto-verified-attributes email --query "UserPool.Id" --output text)
+1. Consola → **Cognito → User pools → Create user pool**.
+2. Configure sign-in experience: método de inicio de sesión **Email**.
+3. Configure security requirements: política de contraseña por defecto está bien; MFA: **No MFA** (para el
+   laboratorio).
+4. Configure sign-up experience: activa **self-registration**; atributos requeridos: `email`.
+5. Configure message delivery: deja **Send email with Cognito** (suficiente para pruebas).
+6. Integrate your app:
+   - User pool name: `subastalive-postores`.
+   - Hosted authentication pages: **Use the Cognito Hosted UI**. Dominio: `subastalive-<algo-único>`.
+   - Initial app client: público, nombre `subastalive-frontend`. **No generes client secret** (queda
+     desmarcado — es una SPA pública).
+   - Allowed callback URLs: `http://localhost:5173/auth/callback/postor`.
+   - Allowed sign-out URLs: `http://localhost:5173`.
+   - Identity providers: Cognito user pool.
+   - OAuth grant types: **Authorization code grant**.
+   - OpenID Connect scopes: `openid`, `email`, `profile`.
+7. **Review and create → Create user pool**.
+8. Entra al user pool creado → pestaña **App integration** → anota el **Client ID** y el **dominio de Cognito**
+   completo. En **User pool overview**, anota el **User pool ID**.
 
-export CLIENT_ID=$(aws cognito-idp create-user-pool-client --user-pool-id $POOL_ID \
-  --client-name subastalive-frontend --no-generate-secret \
-  --explicit-auth-flows ALLOW_ADMIN_USER_PASSWORD_AUTH ALLOW_REFRESH_TOKEN_AUTH \
-  --allowed-o-auth-flows code --allowed-o-auth-scopes openid profile email \
-  --allowed-o-auth-flows-user-pool-client \
-  --callback-urls "http://localhost:5173/auth/callback/postor" \
-  --logout-urls "http://localhost:5173" \
-  --supported-identity-providers COGNITO \
-  --query "UserPoolClient.ClientId" --output text)
+Crea un usuario de prueba:
 
-aws cognito-idp create-user-pool-domain --domain subastalive-$ACCOUNT_ID --user-pool-id $POOL_ID
-```
-
-Crea un usuario de prueba y ponle contraseña permanente:
-
-```bash
-aws cognito-idp admin-create-user --user-pool-id $POOL_ID \
-  --username postor.prueba@example.com \
-  --user-attributes Name=email,Value=postor.prueba@example.com Name=email_verified,Value=true \
-  --message-action SUPPRESS --temporary-password 'Temp1234!'
-
-aws cognito-idp admin-set-user-password --user-pool-id $POOL_ID \
-  --username postor.prueba@example.com --password 'Real1234!' --permanent
-```
-
-Para probar sin construir el flujo completo del navegador, pide el token directo por CLI:
-
-```bash
-aws cognito-idp admin-initiate-auth --user-pool-id $POOL_ID --client-id $CLIENT_ID \
-  --auth-flow ADMIN_USER_PASSWORD_AUTH \
-  --auth-parameters USERNAME=postor.prueba@example.com,PASSWORD='Real1234!'
-```
-
-La respuesta trae `IdToken` y `AccessToken` — vas a usar el `IdToken` en el paso 8 para probar el API
-Gateway con `curl`.
+9. **Users → Create user**. Username/email: `postor.prueba@example.com`. Marca "Mark email as verified".
+   Define una contraseña permanente (evita la temporal, para no tener que cambiarla en el primer login).
 
 ### Microsoft Entra ID (martillero / administrador)
 
@@ -365,31 +275,35 @@ Esto es Azure, no AWS — vía [portal.azure.com](https://portal.azure.com):
 
 ## 8. Puerta de entrada — API Gateway
 
-```bash
-export API_ID=$(aws apigatewayv2 create-api --name subastalive-api \
-  --protocol-type HTTP --target "http://$ALB_DNS" --query ApiId --output text)
+1. Consola → **API Gateway → Create API → HTTP API → Build**.
+2. **Add integration**: Integration type **HTTP**; Method **ANY**; Integration URL:
+   `http://<DNS-del-ALB>` (el que copiaste en el paso 6).
+3. **Configure routes**: método **ANY**, path `/{proxy+}`, apuntando a esa integración.
+4. **Configure stages**: deja el stage `$default` con auto-deploy activado.
+5. **Create**. En el resumen de la API, copia la **Invoke URL**.
 
-export AUTHORIZER_ID=$(aws apigatewayv2 create-authorizer --api-id $API_ID \
-  --authorizer-type JWT --identity-source '$request.header.Authorization' \
-  --name cognito-postores \
-  --jwt-configuration Audience=$CLIENT_ID,Issuer=https://cognito-idp.$AWS_REGION.amazonaws.com/$POOL_ID \
-  --query AuthorizerId --output text)
+### Autorizador JWT
 
-export ROUTE_ID=$(aws apigatewayv2 get-routes --api-id $API_ID \
-  --query "Items[0].RouteId" --output text)
+6. Menú izquierdo de tu API → **Authorizers → Create**.
+7. Tipo: **JWT**. Name: `cognito-postores`. Identity source: `$request.header.Authorization`.
+8. Issuer URL: `https://cognito-idp.<tu-región>.amazonaws.com/<User-pool-ID>`.
+9. Audience: el **Client ID** de Cognito que anotaste antes.
+10. **Create**.
+11. Ve a **Routes**, selecciona la ruta `ANY /{proxy+}` → **Attach authorizer** → elige `cognito-postores` →
+    **Save**.
 
-aws apigatewayv2 update-route --api-id $API_ID --route-id $ROUTE_ID \
-  --authorization-type JWT --authorizer-id $AUTHORIZER_ID
-```
+### Probar sin terminal
 
-Sin token, rechaza. Con el `IdToken` del paso 7, pasa:
-
-```bash
-export API_URL=$(aws apigatewayv2 get-api --api-id $API_ID --query ApiEndpoint --output text)
-
-curl -i $API_URL/                                          # 401 — sin token
-curl -H "Authorization: Bearer <ID_TOKEN>" $API_URL/        # 200 — con token
-```
+- **Sin token:** pega la Invoke URL en el navegador. Abre las DevTools (F12) → pestaña **Network**, recarga
+  → verás la petición con status **401** y el cuerpo del error.
+- **Con token, usando el propio frontend:** en `frontend/.env.local`, pon `VITE_AUTH_MODE=oidc` y completa
+  `VITE_COGNITO_AUTHORITY` (`https://cognito-idp.<región>.amazonaws.com/<User-pool-ID>`) y
+  `VITE_COGNITO_CLIENT_ID`. Corre `npm run dev`, entra como postor de verdad con el usuario de prueba que
+  creaste. Una vez logueado, abre DevTools → pestaña **Application** → **Session Storage** →
+  `http://localhost:5173` → busca la clave que empieza con `oidc.user:` y copia el valor de `id_token` de
+  adentro.
+- Abre **Postman → New Request → GET**, pega la Invoke URL, pestaña **Headers** → agrega
+  `Authorization: Bearer <el id_token copiado>` → **Send**. Debe responder **200**.
 
 > **Un solo issuer por autorizador.** Un autorizador JWT nativo de API Gateway valida contra **un** issuer.
 > Para aceptar Cognito *y* Entra ID en la misma ruta (como pide el contrato), la salida real es un
@@ -399,73 +313,93 @@ curl -H "Authorization: Bearer <ID_TOKEN>" $API_URL/        # 200 — con token
 
 ## 9. Frontend — S3 + CloudFront
 
-```bash
-aws s3 mb s3://subastalive-frontend-$ACCOUNT_ID
-aws s3api put-public-access-block --bucket subastalive-frontend-$ACCOUNT_ID \
-  --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+### Bucket S3
 
+1. Consola → **S3 → Create bucket**. Nombre único, ej. `subastalive-frontend-<tu-account-id>`.
+2. Deja **Block all public access** activado (el bucket queda privado; lo expone CloudFront, no el bucket).
+3. **Create bucket**.
+
+### Subir el build
+
+```bash
 cd frontend
 npm run build
-aws s3 sync ./dist s3://subastalive-frontend-$ACCOUNT_ID --delete
-cd ..
 ```
 
-La distribución de CloudFront con Origin Access Control es más rápida por consola que por CLI (el JSON de
-configuración es largo). En **CloudFront → Create distribution**:
+4. En la consola de S3, entra al bucket → **Upload → Add folder**, selecciona la carpeta `frontend/dist`
+   completa (o arrastra su contenido) → **Upload**.
 
-- **Origin:** el bucket S3 — elige "Origin access control settings (recommended)" y deja que CloudFront
-  actualice la policy del bucket automáticamente.
-- **Viewer protocol policy:** Redirect HTTP to HTTPS.
-- **Default root object:** `index.html`.
-- **Error pages** (pestaña de la distribución ya creada): agrega una respuesta personalizada para `403` y
-  otra para `404`, ambas apuntando a `/index.html` con código de respuesta `200` — sin esto, refrescar la
-  página en una ruta interna del SPA (ej. `/subastas/123`) rompe.
+### Distribución de CloudFront
+
+5. Consola → **CloudFront → Create distribution**.
+6. Origin domain: selecciona tu bucket S3 de la lista.
+7. Origin access: **Origin access control settings (recommended)** → **Create new OAC** → Create.
+8. Viewer protocol policy: **Redirect HTTP to HTTPS**.
+9. Default root object: `index.html`.
+10. **Create distribution**. Aparece un aviso para **actualizar la política del bucket** — haz clic en
+    **Copy policy**, ve a tu bucket S3 → **Permissions → Bucket policy → Edit**, pega la política copiada →
+    **Save changes**. Sin este paso, CloudFront no puede leer del bucket (403).
+11. Con la distribución ya creada, entra a ella → pestaña **Error pages → Create custom error response**:
+    - HTTP error code `403` → Response page path `/index.html` → HTTP response code `200`.
+    - Repite lo mismo para `404`.
+
+    Sin esto, refrescar la página en una ruta interna del SPA (ej. `/subastas/123`) rompe.
+12. Copia el **Distribution domain name** y ábrelo en el navegador — debe cargar SubastaLive.
 
 ## 10. Conectar GitHub Actions
 
-Con la infraestructura arriba, carga en GitHub (**Settings → Secrets and variables → Actions**) los valores
-de la tabla del [README principal](../README.md#secrets-y-variables-que-hay-que-configurar-en-github) —
-Secrets para las credenciales del laboratorio, Variables para nombres de recursos. A partir de ahí, un
-`git push` a cada carpeta dispara su propio pipeline.
+Con toda la infraestructura arriba, ve al repositorio en GitHub → **Settings → Secrets and variables →
+Actions**, y carga lo siguiente (los valores salen todos de lo que ya configuraste en la consola, no hay que
+inventar nada nuevo):
 
-- `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` (Secrets)
-- `AWS_REGION`, `ECR_REPOSITORY_*`, `ECS_CLUSTER`, `ECS_SERVICE_*` (Variables)
-- `S3_BUCKET_FRONTEND`, `CLOUDFRONT_DISTRIBUTION_ID` (Variables)
+| Nombre | Tipo | De dónde sale |
+|---|---|---|
+| `AWS_ACCESS_KEY_ID` | Secret | Panel **AWS Details** del laboratorio en Canvas |
+| `AWS_SECRET_ACCESS_KEY` | Secret | Panel **AWS Details** del laboratorio en Canvas |
+| `AWS_SESSION_TOKEN` | Secret | Panel **AWS Details** del laboratorio en Canvas |
+| `AWS_REGION` | Variable | La región que ves arriba a la derecha en la consola (ej. `us-east-1`) |
+| `ECR_REPOSITORY_USUARIOS/CATALOGO/PUJAS` | Variable | El nombre que le pusiste al repo en ECR (paso 4) |
+| `ECS_CLUSTER` | Variable | `subastalive-cluster` (paso 5) |
+| `ECS_SERVICE_USUARIOS/CATALOGO/PUJAS` | Variable | El nombre del service de ECS (paso 6) |
+| `S3_BUCKET_FRONTEND` | Variable | El nombre del bucket (paso 9) |
+| `CLOUDFRONT_DISTRIBUTION_ID` | Variable | Pestaña General de la distribución (paso 9) |
+
+A partir de acá, un `git push` a cada carpeta dispara su propio pipeline — ver la sección "CI/CD" del
+[README principal](../README.md#cicd--despliegue-automático-a-aws-github-actions).
 
 ## 11. Repetirlo con los tres microservicios reales
 
-Todo lo de los pasos 3 a 6 se repite igual por cada microservicio real, cambiando el nombre. Una diferencia
+Todo lo de los pasos 4 a 6 se repite igual por cada microservicio real, cambiando el nombre. Una diferencia
 real de `ms-catalogo` que vale la pena anotar ahora: su contrato expone **dos** familias de rutas
-(`/subastas/*` y `/lotes/*`), así que su target group necesita dos reglas de listener en el ALB apuntando al
-mismo target group — no una sola, como en el ejemplo de `ms-demo`.
+(`/subastas/*` y `/lotes/*`), así que en el paso de API Gateway necesitas dos rutas apuntando al mismo target
+group — no una sola, como en el ejemplo de `ms-demo`.
 
 ## 12. Costos y limpieza
 
 AWS Academy Learner Lab tiene un tope de gasto y de tiempo por sesión. Si no vas a seguir trabajando, apaga
-en este orden (el inverso al que construiste):
+en este orden (el inverso al que construiste), todo desde la consola:
 
-```bash
-aws ecs update-service --cluster subastalive-cluster --service ms-demo --desired-count 0
-aws ecs delete-service --cluster subastalive-cluster --service ms-demo
-aws ecs delete-cluster --cluster subastalive-cluster
-aws elbv2 delete-load-balancer --load-balancer-arn $ALB_ARN
-aws elbv2 delete-target-group --target-group-arn $TG_ARN
-aws apigatewayv2 delete-api --api-id $API_ID
-aws rds delete-db-instance --db-instance-identifier subastalive-db --skip-final-snapshot
-aws cognito-idp delete-user-pool --user-pool-id $POOL_ID
-```
-
-**CloudFront primero se deshabilita.** No se puede borrar una distribución activa: hay que deshabilitarla,
-esperar a que despliegue el cambio, y recién ahí borrarla (por consola es más simple que por CLI para este
-paso).
+1. **ECS** → Service `ms-demo` → **Update service** → Desired tasks `0` → guarda, espera, luego
+   **Delete service**. Después, **Delete cluster**.
+2. **EC2 → Load Balancers** → selecciona `subastalive-alb` → **Delete**. Luego **Target Groups** →
+   `subastalive-tg-demo` → **Delete**.
+3. **CloudFront** → selecciona la distribución → **Disable** → espera a que despliegue (unos minutos) →
+   recién ahí **Delete**. No se puede borrar una distribución activa.
+4. **S3** → vacía el bucket (**Empty**) → luego **Delete bucket**.
+5. **API Gateway** → selecciona la API → **Delete**.
+6. **RDS** → selecciona `subastalive-db` → **Actions → Delete** → desmarca "Create final snapshot" →
+   confirma escribiendo `delete me`.
+7. **Cognito** → selecciona el user pool → **Delete user pool**.
+8. **EC2 → Security Groups** → borra `subastalive-alb-sg` y `subastalive-ecs-sg` (una vez que nada los use).
+9. **ECR** — opcional: borra los repositorios si no los vas a seguir usando.
 
 ## Checklist final
 
-- [ ] RDS arriba, con los tres esquemas creados y verificados con `\dn`
+- [ ] RDS arriba, con los tres esquemas creados y verificados en pgAdmin
 - [ ] Imagen `ms-demo` construida, en ECR, corriendo en ECS
-- [ ] `curl` al ALB responde `ms-demo OK`
-- [ ] API Gateway rechaza sin token (401) y acepta con el `IdToken` de Cognito (200)
+- [ ] El DNS del ALB responde `ms-demo OK` en el navegador
+- [ ] La Invoke URL del API Gateway da 401 sin token (visto en DevTools) y 200 con el `id_token` de Cognito (visto en Postman)
 - [ ] Usuario de prueba creado en Cognito; app registrada y roles creados en Entra ID
-- [ ] Frontend compilado y sincronizado a S3; CloudFront sirve la app y sobrevive un refresh en ruta interna
+- [ ] Frontend compilado y subido a S3; CloudFront lo sirve y sobrevive un refresh en ruta interna
 - [ ] Secrets y Variables cargados en GitHub; un push dispara el workflow correspondiente
 - [ ] Sabes en qué orden apagar todo cuando termines
