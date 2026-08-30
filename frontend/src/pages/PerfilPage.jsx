@@ -8,7 +8,7 @@ export function PerfilPage() {
   const cargarPerfil = useCallback(() => obtenerMiPerfil(session?.accessToken), [session?.accessToken]);
   const { data: perfil, loading, error } = useAsync(cargarPerfil, [session?.accessToken]);
 
-  if (loading) return <p>Cargando perfil…</p>;
+  if (loading) return <p className="loading-state">Cargando perfil…</p>;
   if (error) return <p className="alert alert-error">No se pudo cargar el perfil: {error.message}</p>;
   if (!perfil) return null;
 

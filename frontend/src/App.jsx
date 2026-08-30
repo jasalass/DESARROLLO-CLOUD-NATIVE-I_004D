@@ -62,6 +62,7 @@ function App() {
             <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </main>
+        <footer className="app-footer">SubastaLive — proyecto DSY1107, Etapa 1</footer>
       </BrowserRouter>
     </AuthProvider>
   );

@@ -18,7 +18,11 @@ export function LoginPage() {
 
   return (
     <section>
-      <h1>Ingresar</h1>
+      <div className="hero">
+        <span className="hero-eyebrow">Bienvenido</span>
+        <h1>Ingresar a SubastaLive</h1>
+        <p className="hero-subtitle">Elige cómo quieres participar en la plataforma.</p>
+      </div>
 
       {AUTH_MODE === "mock" && (
         <p className="alert alert-info">
@@ -29,6 +33,9 @@ export function LoginPage() {
 
       <div className="login-options">
         <div className="card">
+          <div className="login-icon" aria-hidden="true">
+            🏷️
+          </div>
           <h2>Postor</h2>
           <p>Participa en subastas emitiendo pujas.</p>
           <button type="button" onClick={handlePostor}>
@@ -37,6 +44,9 @@ export function LoginPage() {
         </div>
 
         <div className="card">
+          <div className="login-icon" aria-hidden="true">
+            🔨
+          </div>
           <h2>Martillero / Administrador</h2>
           <p>Publica lotes, programa subastas y administra la plataforma.</p>
           {AUTH_MODE === "mock" ? (

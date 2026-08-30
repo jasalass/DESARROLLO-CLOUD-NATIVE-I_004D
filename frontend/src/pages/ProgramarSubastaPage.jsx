@@ -37,11 +37,14 @@ export function ProgramarSubastaPage() {
 
   return (
     <section>
-      <h1>Programar subasta</h1>
-      <p>
-        No hay un listado de "mis lotes" todavía (no está en el contrato de ms-catalogo) — pega el id del lote
-        que quieres subastar. Si vienes de "Crear lote", ya viene precargado.
-      </p>
+      <div className="hero">
+        <span className="hero-eyebrow">Panel de martillero</span>
+        <h1>Programar subasta</h1>
+        <p className="hero-subtitle">
+          No hay un listado de "mis lotes" todavía (no está en el contrato de ms-catalogo) — pega el id del
+          lote que quieres subastar. Si vienes de "Crear lote", ya viene precargado.
+        </p>
+      </div>
 
       <form onSubmit={handleSubmit} className="form">
         <label htmlFor="loteId">ID del lote</label>

@@ -11,12 +11,19 @@ export function HomePage() {
 
   return (
     <section>
-      <h1>Subastas</h1>
+      <div className="hero">
+        <span className="hero-eyebrow">En vivo ahora</span>
+        <h1>Subastas</h1>
+        <p className="hero-subtitle">
+          Explora los lotes disponibles, sigue el precio actual en tiempo real y participa antes de que
+          cierre el martillo.
+        </p>
+      </div>
 
-      {loading && <p>Cargando subastas…</p>}
+      {loading && <p className="loading-state">Cargando subastas…</p>}
       {error && <p className="alert alert-error">No se pudieron cargar las subastas: {error.message}</p>}
 
-      {subastas && subastas.length === 0 && <p>No hay subastas publicadas todavía.</p>}
+      {subastas && subastas.length === 0 && <p className="empty-state">No hay subastas publicadas todavía.</p>}
 
       <div className="card-grid">
         {subastas?.map((subasta) => (

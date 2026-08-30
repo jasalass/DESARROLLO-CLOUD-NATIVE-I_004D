@@ -42,7 +42,11 @@ export function CrearLotePage() {
 
   return (
     <section>
-      <h1>Crear lote</h1>
+      <div className="hero">
+        <span className="hero-eyebrow">Panel de martillero</span>
+        <h1>Crear lote</h1>
+        <p className="hero-subtitle">Describe el artículo y define su precio base antes de programar la subasta.</p>
+      </div>
 
       <form onSubmit={handleSubmit} className="form">
         <label htmlFor="titulo">Título</label>

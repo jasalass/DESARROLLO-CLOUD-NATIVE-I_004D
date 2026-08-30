@@ -10,10 +10,15 @@ export function Navbar() {
     navigate("/");
   }
 
+  const inicial = (session?.nombre ?? "?").trim().charAt(0).toUpperCase();
+
   return (
     <nav className="navbar">
       <Link to="/" className="navbar-brand">
-        SubastaLive
+        <span className="navbar-brand-mark" aria-hidden="true">
+          🔨
+        </span>
+        Subasta<span className="navbar-brand-accent">Live</span>
       </Link>
 
       <div className="navbar-links">
@@ -32,7 +37,10 @@ export function Navbar() {
               </>
             )}
             <span className="navbar-user">
-              {session?.nombre} ({role})
+              <span className="navbar-avatar" aria-hidden="true">
+                {inicial}
+              </span>
+              {session?.nombre} · {role}
             </span>
             <button type="button" onClick={handleLogout}>
               Salir

@@ -26,12 +26,19 @@ export function PujaForm({ subasta, onPujaCreada }) {
   }
 
   if (subasta.estado !== "ABIERTA") {
-    return <p>Esta subasta no está abierta para recibir pujas.</p>;
+    return (
+      <div className="card">
+        <p className="empty-state" style={{ margin: 0 }}>
+          Esta subasta no está abierta para recibir pujas.
+        </p>
+      </div>
+    );
   }
 
   return (
     <form onSubmit={handleSubmit} className="form">
-      <label htmlFor="monto">Tu oferta (mínimo sugerido: ${montoMinimoSugerido.toLocaleString("es-CL")})</label>
+      <h3 style={{ marginBottom: "0.25rem" }}>Hacer una oferta</h3>
+      <label htmlFor="monto">Mínimo sugerido: ${montoMinimoSugerido.toLocaleString("es-CL")}</label>
       <input
         id="monto"
         type="number"

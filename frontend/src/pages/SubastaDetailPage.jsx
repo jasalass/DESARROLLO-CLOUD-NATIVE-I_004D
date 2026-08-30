@@ -13,6 +13,13 @@ const TRANSICIONES = {
   ADJUDICADA: [],
 };
 
+const ESTADO_LABEL = {
+  PROGRAMADA: "Programada",
+  ABIERTA: "En vivo",
+  CERRADA: "Cerrada",
+  ADJUDICADA: "Adjudicada",
+};
+
 export function SubastaDetailPage() {
   const { id } = useParams();
   const { session, role } = useAuth();
@@ -29,46 +36,77 @@ export function SubastaDetailPage() {
     setVersion((v) => v + 1);
   }
 
-  if (loading) return <p>Cargando subasta…</p>;
+  if (loading) return <p className="loading-state">Cargando subasta…</p>;
   if (error) return <p className="alert alert-error">No se pudo cargar la subasta: {error.message}</p>;
   if (!subasta) return null;
 
   const esMartillero = role === "MARTILLERO" || role === "ADMINISTRADOR";
   const transicionesDisponibles = TRANSICIONES[subasta.estado] ?? [];
+  const estadoClase = `badge-${(subasta.estado ?? "").toLowerCase()}`;
 
   return (
     <section>
-      <h1>{subasta.lote?.titulo}</h1>
-      <p>{subasta.lote?.descripcion}</p>
-      <p>Estado: <strong>{subasta.estado}</strong></p>
-      <p>Precio actual: ${subasta.precioActual?.toLocaleString("es-CL")}</p>
-      <p>Total de pujas: {subasta.totalPujas}</p>
-      <p>Cierra: {new Date(subasta.fechaCierre).toLocaleString("es-CL")}</p>
+      <div className="hero">
+        <span className={`badge ${estadoClase}`}>
+          <span className="badge-dot" aria-hidden="true" />
+          {ESTADO_LABEL[subasta.estado] ?? subasta.estado}
+        </span>
+        <h1 style={{ marginTop: "0.6rem" }}>{subasta.lote?.titulo}</h1>
+        <p className="hero-subtitle">{subasta.lote?.descripcion}</p>
+      </div>
 
-      {role === "POSTOR" && (
-        <PujaForm subasta={subasta} onPujaCreada={() => setVersion((v) => v + 1)} />
-      )}
+      <div className="detail-layout">
+        <div className="detail-main">
+          <div className="detail-stats">
+            <div className="detail-stat">
+              <div className="detail-stat-label">Precio actual</div>
+              <div className="detail-stat-value">${subasta.precioActual?.toLocaleString("es-CL")}</div>
+            </div>
+            <div className="detail-stat">
+              <div className="detail-stat-label">Total de pujas</div>
+              <div className="detail-stat-value">{subasta.totalPujas}</div>
+            </div>
+            <div className="detail-stat">
+              <div className="detail-stat-label">Cierra</div>
+              <div className="detail-stat-value" style={{ fontSize: "1rem" }}>
+                {new Date(subasta.fechaCierre).toLocaleString("es-CL")}
+              </div>
+            </div>
+            <div className="detail-stat">
+              <div className="detail-stat-label">Incremento mínimo</div>
+              <div className="detail-stat-value" style={{ fontSize: "1rem" }}>
+                ${subasta.lote?.incrementoMinimo?.toLocaleString("es-CL") ?? "—"}
+              </div>
+            </div>
+          </div>
 
-      {esMartillero && transicionesDisponibles.length > 0 && (
-        <div className="form">
-          <p>Acciones de martillero:</p>
-          {transicionesDisponibles.map((estado) => (
-            <button key={estado} type="button" onClick={() => handleCambiarEstado(estado)}>
-              Cambiar a {estado}
-            </button>
-          ))}
+          {esMartillero && transicionesDisponibles.length > 0 && (
+            <div style={{ marginTop: "0.5rem" }}>
+              <p style={{ fontWeight: 600, marginBottom: "0.35rem" }}>Acciones de martillero:</p>
+              {transicionesDisponibles.map((estado) => (
+                <button key={estado} type="button" onClick={() => handleCambiarEstado(estado)}>
+                  Cambiar a {ESTADO_LABEL[estado] ?? estado}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <h2>Historial de pujas</h2>
+          {!pujas?.length && <p className="empty-state">Todavía no hay pujas en esta subasta.</p>}
+          <ul>
+            {pujas?.map((puja) => (
+              <li key={puja.id}>
+                <strong>${puja.monto.toLocaleString("es-CL")}</strong>
+                <span>{new Date(puja.fecha).toLocaleString("es-CL")}</span>
+              </li>
+            ))}
+          </ul>
         </div>
-      )}
 
-      <h2>Historial de pujas</h2>
-      {!pujas?.length && <p>Todavía no hay pujas en esta subasta.</p>}
-      <ul>
-        {pujas?.map((puja) => (
-          <li key={puja.id}>
-            ${puja.monto.toLocaleString("es-CL")} — {new Date(puja.fecha).toLocaleString("es-CL")}
-          </li>
-        ))}
-      </ul>
+        <div className="detail-side">
+          {role === "POSTOR" && <PujaForm subasta={subasta} onPujaCreada={() => setVersion((v) => v + 1)} />}
+        </div>
+      </div>
     </section>
   );
 }
