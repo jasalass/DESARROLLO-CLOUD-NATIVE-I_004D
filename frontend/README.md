@@ -121,3 +121,15 @@ contenedor en ejecución), se pasan como `--build-arg` — ver
 los prerrequisitos de infraestructura y los Secrets/Variables de GitHub están en la sección "CI/CD" del
 [README principal](../README.md#cicd--despliegue-automático-a-aws-github-actions) y en
 [`../docs/despliegue-aws.md`](../docs/despliegue-aws.md).
+
+## Dónde está implementado cada punto de la rúbrica (archivo:línea)
+
+| Qué exige la pauta | Dónde | Qué hace exactamente |
+|---|---|---|
+| Inicia el flujo de login (botones "Ingresar como...") | [`src/pages/LoginPage.jsx:9-17`](src/pages/LoginPage.jsx#L9-L17) | `handlePostor()`/`handleStaff()` llaman a `loginPostor()`/`loginStaff()` del contexto de auth |
+| Flujo OIDC "Authorization Code con PKCE" | [`src/auth/AuthContext.jsx:108-116`](src/auth/AuthContext.jsx#L108-L116) y [`src/auth/oidcConfig.js:5-12`](src/auth/oidcConfig.js#L5-L12) | `loginPostor()`/`loginStaff()` llaman a `signinRedirect()` de `oidc-client-ts`, configurado con `response_type: "code"` — la librería genera el `code_verifier`/`code_challenge` (PKCE) y valida `state` internamente, no hay que armarlo a mano |
+| Completa el flujo tras volver del IdP y obtiene los tokens | [`src/pages/CallbackPostorPage.jsx:10-18`](src/pages/CallbackPostorPage.jsx#L10-L18), [`src/pages/CallbackStaffPage.jsx:10-18`](src/pages/CallbackStaffPage.jsx#L10-L18) y [`src/auth/AuthContext.jsx:118-132`](src/auth/AuthContext.jsx#L118-L132) | `completarCallbackPostor()`/`completarCallbackStaff()` llaman a `signinRedirectCallback()`, que intercambia el `code` por los tokens (id/access/refresh) |
+| Extrae claims del token (rol, nombre, email, sub) | [`src/auth/AuthContext.jsx:51-60`](src/auth/AuthContext.jsx#L51-L60) y [`src/auth/oidcConfig.js:40-42`](src/auth/oidcConfig.js#L40-L42) | `sessionFromOidcUser()` arma la sesión desde `user.profile`; `extraerRol()` centraliza de dónde sale el rol (`custom:rol`, `role` o `roles[0]`, según el proveedor) |
+| Adjunta el JWT a las llamadas al backend | [`src/api/httpClient.js:5-14`](src/api/httpClient.js#L5-L14) | Header `Authorization: Bearer <token>` agregado automáticamente en `request()`, usado por todos los `api/*Api.js` |
+| Restringe rutas por rol en el frontend | [`src/auth/RequireAuth.jsx:6-26`](src/auth/RequireAuth.jsx#L6-L26) | Redirige a `/login` si no hay sesión; muestra "sin permiso" si el rol no está en la lista permitida de la ruta |
+| Logout real (no solo local) | [`src/auth/oidcConfig.js:14-26`](src/auth/oidcConfig.js#L14-L26) y [`src/auth/AuthContext.jsx:134-158`](src/auth/AuthContext.jsx#L134-L158) | Cognito no expone el `end_session_endpoint` estándar de OIDC — `logout()` limpia la sesión local de `oidc-client-ts` y redirige a mano al `/logout` propietario de Cognito (`cognitoLogoutUrl()`) |

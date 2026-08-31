@@ -34,6 +34,8 @@ Instala esto en tu máquina:
 - **Docker Desktop** — para construir la imagen de práctica (esto sí abre una terminal, es inevitable).
 - **Postman** (o Insomnia) — para probar el API Gateway con un token, sin usar `curl`.
 - **Node.js 20+** — para el build del frontend (`npm run build`).
+- **OpenSSL** — para generar el certificado autofirmado del ALB del frontend (sección 8); viene incluido con
+  Git Bash en Windows, y ya instalado por defecto en macOS/Linux.
 - El repositorio de SubastaLive clonado localmente.
 
 > **Específico de AWS Academy Learner Lab.** No puedes crear roles ni políticas IAM — la cuenta ya trae uno
@@ -655,12 +657,11 @@ Esto es Azure, no AWS — vía [portal.azure.com](https://portal.azure.com):
 
 - **Sin token:** pega la Invoke URL en el navegador. Abre las DevTools (F12) → pestaña **Network**, recarga
   → verás la petición con status **401** y el cuerpo del error.
-- **Con token, usando el propio frontend:** en `frontend/.env.local`, pon `VITE_AUTH_MODE=oidc` y completa
-  `VITE_COGNITO_AUTHORITY` (`https://cognito-idp.<región>.amazonaws.com/<User-pool-ID>`) y
-  `VITE_COGNITO_CLIENT_ID`. Corre `npm run dev`, entra como postor de verdad con el usuario de prueba que
-  creaste. Una vez logueado, abre DevTools → pestaña **Application** → **Session Storage** →
-  `http://localhost:5173` → busca la clave que empieza con `oidc.user:` y copia el valor de `id_token` de
-  adentro.
+- **Con token, usando el propio frontend:** si ya configuraste `frontend/.env.local` en la sección 8 para
+  probar Cognito, reusa ese mismo archivo — no hace falta tocarlo de nuevo. `cd frontend && npm run dev`,
+  entra como postor con el usuario de prueba. Una vez logueado, abre DevTools → pestaña **Application** →
+  **Session Storage** → `http://localhost:5173` → busca la clave que empieza con `oidc.user:` y copia el
+  valor de `id_token` de adentro.
 - Abre **Postman → New Request → GET**, pega la Invoke URL, pestaña **Headers** → agrega
   `Authorization: Bearer <el id_token copiado>` → **Send**. Debe responder **200**.
 
@@ -876,7 +877,9 @@ esquema solo.
 - [ ] Target del Target Group en estado **healthy** (no "Unhealthy — Request timed out")
 - [ ] `http://<DNS-del-ALB>/health` responde `ms-pujas up` en el navegador
 - [ ] La Invoke URL del API Gateway da 401 sin token (visto en DevTools) y 200 con el `id_token` de Cognito (visto en Postman)
-- [ ] Usuario de prueba creado en Cognito; app registrada y roles creados en Entra ID
-- [ ] Frontend corriendo en ECS detrás de su propio ALB; abre en el navegador y sobrevive un refresh en ruta interna
-- [ ] Secrets y Variables cargados en GitHub; un push dispara el workflow correspondiente
+- [ ] Usuario de prueba creado en Cognito; login **y logout** probados de punta a punta (el logout debe pedir credenciales de nuevo, no re-entrar solo)
+- [ ] App registrada y roles creados en Entra ID (pendiente)
+- [ ] Frontend corriendo en ECS detrás de su propio ALB, con **HTTPS** (certificado autofirmado importado a ACM) — Cognito exige `https://` en el callback para cualquier dominio que no sea `localhost`
+- [ ] Security group del ALB del frontend con **2 reglas**: HTTP/80 y HTTPS/443 (fácil perder la de 80 sin querer al agregar la de 443)
+- [ ] Secrets y Variables cargados en GitHub, incluyendo `VITE_COGNITO_DOMAIN`; un push dispara el workflow correspondiente
 - [ ] Sabes en qué orden apagar todo cuando termines (empezando por el NAT Gateway)

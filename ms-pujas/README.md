@@ -202,3 +202,19 @@ Ya implementado y desplegado — este servicio no está pendiente:
       errores reales encontrados y su solución. El pipeline
       [`../.github/workflows/deploy-ms-pujas.yml`](../.github/workflows/deploy-ms-pujas.yml) despliega
       automáticamente en cada push a esta carpeta.
+
+## Dónde está implementado cada punto de la rúbrica (archivo:línea)
+
+Para la presentación — el indicador "Configura correctamente el BFF para que, al igual que el API Manager,
+pueda validar el token" de la pauta se cumple acá, en el backend, no en un servicio aparte (ver la discusión
+en [`../docs/despliegue-aws.md`](../docs/despliegue-aws.md) sobre por qué no se construyó un BFF separado):
+
+| Qué exige la pauta | Dónde | Qué hace exactamente |
+|---|---|---|
+| Valida issuer y audience del JWT | [`src/main/java/com/subastalive/pujas/security/SecurityConfig.java:66-75`](src/main/java/com/subastalive/pujas/security/SecurityConfig.java#L66-L75) | `issuerAuthenticationManagerResolver()` arma un `JwtIssuerAuthenticationManagerResolver` con un `AuthenticationManager` por cada issuer configurado (Cognito y Entra ID) — solo un JWT cuyo `iss` esté en ese mapa pasa a validarse |
+| Verifica la firma del token | [`SecurityConfig.java:77-79`](src/main/java/com/subastalive/pujas/security/SecurityConfig.java#L77-L79) | `jwtAuthenticationManager()` crea el `JwtDecoder` con `JwtDecoders.fromIssuerLocation(issuerUri)`, que descubre las claves públicas del issuer (JWKS) y valida la firma con ellas |
+| Verifica la vigencia (expiración) | [`SecurityConfig.java:77-79`](src/main/java/com/subastalive/pujas/security/SecurityConfig.java#L77-L79) | La incluye el `JwtDecoder` de Spring Security por defecto (valida `exp`/`nbf` automáticamente al decodificar) |
+| Aplica autorización por rol | [`security/CurrentUser.java:18-27`](src/main/java/com/subastalive/pujas/security/CurrentUser.java#L18-L27) y [`web/PujaController.java:42-45`](src/main/java/com/subastalive/pujas/web/PujaController.java#L42-L45) | `CurrentUser.resolve()` extrae el rol desde el `GrantedAuthority` (`ROLE_<ROL>`, ver `SecurityConfig.java:84-91`); `PujaController.crear()` rechaza con `AccessDeniedException` si el rol no es `POSTOR` |
+| Responde con códigos de error adecuados | [`SecurityConfig.java:56-61`](src/main/java/com/subastalive/pujas/security/SecurityConfig.java#L56-L61) (401/403 desde la capa de seguridad) y [`web/GlobalExceptionHandler.java:20-65`](src/main/java/com/subastalive/pujas/web/GlobalExceptionHandler.java#L20-L65) (409/400/404/502/403/500 desde la lógica de negocio) | Todos devuelven el mismo formato `{codigo, mensaje, detalles}` vía [`web/JsonErrorWriter.java:21-25`](src/main/java/com/subastalive/pujas/web/JsonErrorWriter.java#L21-L25) o `ErrorResponse.of(...)` |
+| Endpoint de salud para verificar el despliegue | [`web/HealthController.java:9-12`](src/main/java/com/subastalive/pujas/web/HealthController.java#L9-L12) | `GET /health` → `"ms-pujas up"`, sin autenticación (`SecurityConfig.java:52`) — es lo que usa el health check del Target Group en AWS |
+| Modo de prueba sin IdPs reales (perfil `local`) | [`security/LocalSecurityConfig.java`](src/main/java/com/subastalive/pujas/security/LocalSecurityConfig.java), [`security/LocalTokenAuthFilter.java`](src/main/java/com/subastalive/pujas/security/LocalTokenAuthFilter.java) | Reemplaza la validación JWT real por un token trivial (`Bearer local:<sub>:<ROL>`) — activo solo con `SPRING_PROFILES_ACTIVE=local`, nunca en producción |
