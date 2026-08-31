@@ -131,7 +131,7 @@ export function AuthProvider({ children }) {
     return nuevaSesion;
   }
 
-  function logout() {
+  async function logout() {
     if (AUTH_MODE === "mock") {
       localStorage.removeItem(MOCK_SESSION_KEY);
       setSession(null);
@@ -140,19 +140,21 @@ export function AuthProvider({ children }) {
     }
 
     const rolActual = session?.role;
-    getEntraUserManager().removeUser();
+    setSession(null);
+    setStatus("anonymous");
+    await getEntraUserManager().removeUser();
 
     if (rolActual === "POSTOR") {
-      // Redirige de inmediato al /logout de Cognito — no hay nada más que limpiar acá porque la
-      // navegación fuera de la app corta la ejecución (Cognito redirige de vuelta a
-      // post_logout_redirect_uri una vez cerrada su sesión).
+      // Limpia también la sesión local de oidc-client-ts ANTES de redirigir — si no, al volver de
+      // Cognito la app encuentra el usuario guardado en storage (con el access token todavía
+      // vigente, dura 60 minutos) y lo sigue tratando como autenticado, aunque Cognito ya haya
+      // cerrado la sesión del lado servidor.
+      await getCognitoUserManager().removeUser();
       window.location.href = cognitoLogoutUrl();
       return;
     }
 
-    getCognitoUserManager().removeUser();
-    setSession(null);
-    setStatus("anonymous");
+    await getCognitoUserManager().removeUser();
   }
 
   const value = useMemo(
