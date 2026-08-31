@@ -11,6 +11,20 @@ export const cognitoSettings = {
   scope: "openid profile email",
 };
 
+// El Hosted UI de Cognito no implementa el "end_session_endpoint" estándar de OIDC — mantiene su
+// propia sesión de SSO en su dominio, separada de la del navegador con la app. Sin este logout
+// explícito contra /logout, cerrar sesión en la app no cierra la sesión en Cognito, y un login
+// posterior vuelve a entrar solo (sin pedir credenciales) porque el IdP todavía te reconoce.
+export const cognitoDomain = import.meta.env.VITE_COGNITO_DOMAIN;
+
+export function cognitoLogoutUrl() {
+  const params = new URLSearchParams({
+    client_id: cognitoSettings.client_id,
+    logout_uri: cognitoSettings.post_logout_redirect_uri,
+  });
+  return `${cognitoDomain}/logout?${params.toString()}`;
+}
+
 export const entraSettings = {
   authority: import.meta.env.VITE_ENTRA_AUTHORITY,
   client_id: import.meta.env.VITE_ENTRA_CLIENT_ID,

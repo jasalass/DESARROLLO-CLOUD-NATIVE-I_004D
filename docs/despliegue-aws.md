@@ -675,6 +675,7 @@ En Canvas, dentro del laboratorio (AWS Academy Learner Lab), haz clic en **"AWS 
 | `VITE_API_BASE_URL` | vacío (por ahora) | La **Invoke URL** que te da API Gateway al crearlo (sección 9) — hasta entonces no hay nada que poner |
 | `VITE_COGNITO_AUTHORITY` | (pendiente) | `https://cognito-idp.<región>.amazonaws.com/<User-pool-ID>` — el User pool ID sale de **Cognito → tu user pool → User pool overview** (sección 8) |
 | `VITE_COGNITO_CLIENT_ID` | (pendiente) | **Cognito → tu user pool → App integration → tu app client → Client ID** (sección 8) |
+| `VITE_COGNITO_DOMAIN` | (pendiente) | **Cognito → tu user pool → App integration → Domain** — la URL completa con `https://`, ej. `https://subastalive-xxxx.auth.us-east-1.amazoncognito.com`. Necesaria para poder cerrar sesión de verdad (ver nota abajo) |
 | `VITE_ENTRA_AUTHORITY` | (pendiente) | `https://login.microsoftonline.com/<TENANT_ID>/v2.0` — el Tenant ID sale del portal de Azure, **Entra ID → App registrations → tu app → Directory (tenant) ID** (sección 8) |
 | `VITE_ENTRA_CLIENT_ID` | (pendiente) | **Entra ID → App registrations → tu app → Application (client) ID** (sección 8) |
 

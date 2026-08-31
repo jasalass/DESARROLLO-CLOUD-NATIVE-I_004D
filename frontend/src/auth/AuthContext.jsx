@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { UserManager } from "oidc-client-ts";
-import { AUTH_MODE, cognitoSettings, entraSettings, extraerRol } from "./oidcConfig";
+import { AUTH_MODE, cognitoSettings, entraSettings, extraerRol, cognitoLogoutUrl } from "./oidcConfig";
 
 const AuthContext = createContext(null);
 
@@ -138,8 +138,19 @@ export function AuthProvider({ children }) {
       setStatus("anonymous");
       return;
     }
-    getCognitoUserManager().removeUser();
+
+    const rolActual = session?.role;
     getEntraUserManager().removeUser();
+
+    if (rolActual === "POSTOR") {
+      // Redirige de inmediato al /logout de Cognito — no hay nada más que limpiar acá porque la
+      // navegación fuera de la app corta la ejecución (Cognito redirige de vuelta a
+      // post_logout_redirect_uri una vez cerrada su sesión).
+      window.location.href = cognitoLogoutUrl();
+      return;
+    }
+
+    getCognitoUserManager().removeUser();
     setSession(null);
     setStatus("anonymous");
   }
