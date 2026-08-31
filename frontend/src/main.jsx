@@ -5,8 +5,12 @@ import "./styles.css";
 
 async function habilitarMocksSiCorresponde() {
   if (import.meta.env.VITE_USE_MOCKS === "false") return;
-  const { worker } = await import("./mocks/browser");
-  return worker.start({ onUnhandledRequest: "bypass" });
+  try {
+    const { worker } = await import("./mocks/browser");
+    await worker.start({ onUnhandledRequest: "bypass" });
+  } catch (error) {
+    console.error("No se pudo registrar el Service Worker de MSW, la app sigue sin mocks:", error);
+  }
 }
 
 habilitarMocksSiCorresponde().then(() => {
