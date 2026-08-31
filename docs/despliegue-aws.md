@@ -600,9 +600,24 @@ para llegar a los microservicios, y no queremos mezclar reglas de listener por p
 15. Launch type **Fargate**. Task definition `subastalive-frontend`. Service name `frontend`. Desired tasks `1`.
 16. Networking: subredes **privadas** (`subastalive-private-1a`, `subastalive-private-1b`), Security group
     `subastalive-frontend-ecs-sg`, **Public IP: Turned OFF**.
-17. Load balancing: **Application Load Balancer** → `subastalive-frontend-alb`, listener 80, target group
-    `subastalive-tg-frontend`.
-18. **Create**.
+17. Load balancing: marca **"Usar un equilibrio de carga"** (no lo dejes en blanco/None) → Tipo: **Application
+    Load Balancer** → **Usar un balanceador de carga existente** → `subastalive-frontend-alb` → **Usar un
+    agente de escucha existente** → `HTTP:80` → **Usar un grupo de destino existente** → `subastalive-tg-frontend`.
+18. **Health check grace period**: `60` segundos.
+19. Revisa que **Public IP** haya quedado en **Desactivado/OFF** — la consola a veces lo deja en "Activado"
+    por defecto en este asistente, distinto al de `ms-pujas`. Si se te pasa, no rompe nada de inmediato, pero
+    contradice el diseño (la tarea no debería tener IP pública).
+20. **Create**.
+
+> **Si el Service queda creado pero el Target Group nunca registra ningún destino** (la tarea llega a
+> `Running` sin problema, pero `subastalive-tg-frontend` se queda en `0 Destinos totales` para siempre) —
+> revisa **ECS → Services → frontend → Configuration and networking → Load balancing**. Si aparece vacío
+> ("Sin equilibradores de carga"), es porque el paso 17 no se guardó al crear el service — pasa si el radio
+> button quedó sin marcar o se marcó "Crear nuevo agente de escucha" en vez de "Usar uno existente" (esto
+> último tira un error explícito, "el puerto ya existe", que sí se nota; la primera falla en cambio es
+> silenciosa). **No se puede agregar un load balancer a un service que ya existe sin uno** — la única
+> solución es **Delete service** y **Create** de nuevo, esta vez confirmando que el bloque de "Equilibrio de
+> carga" quede completo antes de crear.
 
 La tarea va a quedar fallando al intentar descargar la imagen (`subastalive/frontend:latest` todavía no
 existe en ECR) — es esperado, se resuelve en el paso siguiente.
@@ -620,25 +635,58 @@ existe en ECR) — es esperado, se resuelve en el paso siguiente.
 ## 11. Conectar GitHub Actions
 
 Con toda la infraestructura arriba, ve al repositorio en GitHub → **Settings → Secrets and variables →
-Actions**, y carga lo siguiente (los valores salen todos de lo que ya configuraste en la consola, no hay que
-inventar nada nuevo):
+Actions**. Ahí hay dos pestañas separadas — **Secrets** y **Variables** — cada una con su propio botón "New
+repository secret" / "New repository variable". No confundirlas: si un valor sensible (las credenciales AWS)
+se carga como Variable en vez de Secret, queda visible en los logs del workflow.
 
-| Nombre | Tipo | De dónde sale |
+### Pestaña "Secrets" — 3 valores, credenciales del laboratorio
+
+En Canvas, dentro del laboratorio (AWS Academy Learner Lab), haz clic en **"AWS Details"** (al lado del botón
+"AWS" que abre la consola) → se despliega un panel con un bloque **"AWS CLI"** que trae las tres líneas
+`aws_access_key_id`, `aws_secret_access_key` y `aws_session_token` ya armadas — copia el valor de cada una
+(sin la comilla ni el nombre de la variable, solo el valor después del `=`).
+
+| Nombre del Secret | Valor |
+|---|---|
+| `AWS_ACCESS_KEY_ID` | el valor de `aws_access_key_id` en el panel AWS Details |
+| `AWS_SECRET_ACCESS_KEY` | el valor de `aws_secret_access_key` en el panel AWS Details |
+| `AWS_SESSION_TOKEN` | el valor de `aws_session_token` en el panel AWS Details |
+
+> Estas credenciales expiran junto con la sesión del laboratorio (dura unas horas). Cuando un workflow que
+> antes funcionaba empiece a fallar en el paso "Configurar credenciales AWS" con un error de autenticación,
+> lo primero es volver a Canvas, reiniciar el laboratorio si hace falta, y repetir estos 3 valores acá — se
+> sobrescriben con el mismo nombre, no hay que borrarlos primero.
+
+### Pestaña "Variables" — nombres e IDs que ya generaste en la consola
+
+| Nombre de la Variable | Valor | De dónde sale exactamente |
 |---|---|---|
-| `AWS_ACCESS_KEY_ID` | Secret | Panel **AWS Details** del laboratorio en Canvas |
-| `AWS_SECRET_ACCESS_KEY` | Secret | Panel **AWS Details** del laboratorio en Canvas |
-| `AWS_SESSION_TOKEN` | Secret | Panel **AWS Details** del laboratorio en Canvas |
-| `AWS_REGION` | Variable | La región que ves arriba a la derecha en la consola (ej. `us-east-1`) |
-| `ECR_REPOSITORY_USUARIOS/CATALOGO/PUJAS` | Variable | El nombre que le pusiste al repo en ECR (sección 5) |
-| `ECS_CLUSTER` | Variable | `subastalive-cluster` (sección 6) |
-| `ECS_SERVICE_USUARIOS/CATALOGO/PUJAS` | Variable | El nombre del service de ECS (sección 7) |
-| `ECR_REPOSITORY_FRONTEND` | Variable | `subastalive/frontend` (sección 10) |
-| `ECS_SERVICE_FRONTEND` | Variable | `frontend` (sección 10) |
-| `VITE_AUTH_MODE` | Variable | `mock` para probar sin IdPs reales, `oidc` una vez que Cognito/Entra ID estén listos |
-| `VITE_USE_MOCKS` | Variable | `true` mientras los microservicios reales no existan |
-| `VITE_API_BASE_URL` | Variable | La Invoke URL del API Gateway (sección 9) — solo importa si `VITE_USE_MOCKS=false` |
-| `VITE_COGNITO_AUTHORITY`, `VITE_COGNITO_CLIENT_ID` | Variable | Del user pool de Cognito (sección 8) — solo si `VITE_AUTH_MODE=oidc` |
-| `VITE_ENTRA_AUTHORITY`, `VITE_ENTRA_CLIENT_ID` | Variable | De la app de Entra ID (sección 8) — solo si `VITE_AUTH_MODE=oidc` |
+| `AWS_REGION` | `us-east-1` | Esquina superior derecha de la consola de AWS |
+| `ECR_REPOSITORY_PUJAS` | `subastalive/ms-pujas` | El nombre que le pusiste al repo en **ECR** (sección 5) |
+| `ECR_REPOSITORY_CATALOGO` | `subastalive/ms-catalogo` | Igual, cuando crees ese repo (sección 12) |
+| `ECR_REPOSITORY_USUARIOS` | `subastalive/ms-usuarios` | Igual, cuando crees ese repo (sección 12) |
+| `ECS_CLUSTER` | `subastalive-cluster` | Nombre del cluster (sección 6) |
+| `ECS_SERVICE_PUJAS` | `ms-pujas` | Nombre exacto del Service en **ECS → Clusters → subastalive-cluster → Services** |
+| `ECS_SERVICE_CATALOGO` / `ECS_SERVICE_USUARIOS` | `ms-catalogo` / `ms-usuarios` | Igual, cuando existan (sección 12) |
+| `ECR_REPOSITORY_FRONTEND` | `subastalive/frontend` | El repo de ECR del frontend (sección 10) |
+| `ECS_SERVICE_FRONTEND` | `frontend` | Nombre del Service de ECS del frontend (sección 10) |
+| `VITE_AUTH_MODE` | `mock` (por ahora) | Ver nota abajo — cambia a `oidc` recién en la sección 8/9 |
+| `VITE_USE_MOCKS` | `true` (por ahora) | Ver nota abajo |
+| `VITE_API_BASE_URL` | vacío (por ahora) | La **Invoke URL** que te da API Gateway al crearlo (sección 9) — hasta entonces no hay nada que poner |
+| `VITE_COGNITO_AUTHORITY` | (pendiente) | `https://cognito-idp.<región>.amazonaws.com/<User-pool-ID>` — el User pool ID sale de **Cognito → tu user pool → User pool overview** (sección 8) |
+| `VITE_COGNITO_CLIENT_ID` | (pendiente) | **Cognito → tu user pool → App integration → tu app client → Client ID** (sección 8) |
+| `VITE_ENTRA_AUTHORITY` | (pendiente) | `https://login.microsoftonline.com/<TENANT_ID>/v2.0` — el Tenant ID sale del portal de Azure, **Entra ID → App registrations → tu app → Directory (tenant) ID** (sección 8) |
+| `VITE_ENTRA_CLIENT_ID` | (pendiente) | **Entra ID → App registrations → tu app → Application (client) ID** (sección 8) |
+
+> **Por qué `mock`/`true`/vacío por ahora:** el primer despliegue del frontend (para probar que ECR → ECS →
+> ALB funciona de punta a punta) se hace *antes* de tener Cognito, Entra ID o API Gateway listos — no hay
+> nada real contra qué autenticar todavía. Con `VITE_AUTH_MODE=mock` el login es instantáneo (sin redirigir a
+> ningún IdP) y con `VITE_USE_MOCKS=true` las llamadas a la API las responde MSW en el propio navegador, así
+> que el frontend funciona standalone. Cuando termines las secciones 8 y 9, vuelve acá, cambia
+> `VITE_AUTH_MODE` a `oidc`, `VITE_USE_MOCKS` a `false`, completa `VITE_API_BASE_URL` y las 4 variables de
+> Cognito/Entra ID, y vuelve a disparar **Actions → Deploy frontend → Run workflow** para que reconstruya la
+> imagen con los valores reales (son variables de build de Vite — quedan incrustadas en el bundle, cambiar
+> solo la Variable en GitHub no alcanza, hay que volver a construir).
 
 A partir de acá, un `git push` a cada carpeta dispara su propio pipeline — ver la sección "CI/CD" del
 [README principal](../README.md#cicd--despliegue-automático-a-aws-github-actions).
