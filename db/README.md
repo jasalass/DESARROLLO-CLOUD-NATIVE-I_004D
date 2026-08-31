@@ -45,7 +45,10 @@ migraciones nuevas se agregan dentro de *su propio* código, no acá.
 
 Igual que las imágenes Docker viajan con el código y se actualizan solas en cada deploy, el esquema de la
 base de datos puede hacer lo mismo — **no hace falta correr nada a mano contra RDS, ni siquiera la primera
-vez**. Cuando quien construya `ms-usuarios`/`ms-catalogo`/`ms-pujas` arranque su proyecto Spring Boot:
+vez**. `ms-pujas` ya funciona así, probado tanto en Docker Compose local como en RDS real en AWS (ver
+[`../docs/despliegue-aws.md`](../docs/despliegue-aws.md)) — al arrancar, sus logs muestran exactamente
+`Schema "schema_pujas" is up to date`. Cuando quien construya `ms-usuarios`/`ms-catalogo` arranque su
+proyecto:
 
 1. Agregar la dependencia `flyway-core` (y `flyway-database-postgresql` en versiones recientes de Flyway).
 2. Copiar el `V1__init.sql` correspondiente de esta carpeta a

@@ -1,8 +1,12 @@
 # ms-usuarios
 
-> Este microservicio aún no está implementado. Este documento es el **contrato** que debe cumplir, para que
-> quien lo construya (en cualquier stack — Spring Boot, Node, .NET, lo que sea) pueda hacerlo sin coordinar
-> cada detalle en vivo con el resto del equipo. Ver el plan completo en
+> Este microservicio todavía no tiene su implementación real. Esta carpeta trae por ahora un **stub liviano
+> en Node/Express** (`src/server.js`) que respeta el contrato JSON exacto de abajo pero sin lógica de negocio
+> real (sin Flyway, sin validación JWT, sin persistencia más allá de datos en memoria) — sirve únicamente
+> para poder levantar y probar el sistema completo (frontend + gateway + los tres servicios) mientras se
+> construye la versión definitiva. Este documento es el **contrato** que debe cumplir esa versión definitiva,
+> para que quien la construya (en cualquier stack — Spring Boot, Node, .NET, lo que sea) pueda hacerlo sin
+> coordinar cada detalle en vivo con el resto del equipo. Ver el plan completo en
 > [`../docs/SubastaLive_Plan_de_Proyecto_v3.pdf`](../docs/SubastaLive_Plan_de_Proyecto_v3.pdf) (secciones 5.6, 6.2, 6.3).
 >
 > Convenciones generales (formato de error, tipos de dato, roles, header de auth) están centralizadas en el

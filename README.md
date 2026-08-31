@@ -14,12 +14,13 @@ una vez en su propio laboratorio.
 ```
 SubastaLive/
 ├── .github/workflows/   Pipelines CI/CD (build → ECR → deploy ECS), uno por microservicio
-├── frontend/        SPA — login dual Cognito / Entra ID
-├── ms-usuarios/     Microservicio — perfil de dominio del usuario           (SIN IMPLEMENTAR — solo contrato)
-├── ms-catalogo/     Microservicio — lotes, subastas y estados               (SIN IMPLEMENTAR — solo contrato)
-├── ms-pujas/        Microservicio — recepción y validación de pujas        (SIN IMPLEMENTAR — solo contrato)
+├── frontend/        SPA — login dual Cognito / Entra ID (implementado, desplegado en ECS)
+├── ms-usuarios/     Microservicio — perfil de dominio del usuario           (stub liviano Node/Express)
+├── ms-catalogo/     Microservicio — lotes, subastas y estados               (stub liviano Node/Express)
+├── ms-pujas/        Microservicio — recepción y validación de pujas        (implementado en Spring Boot, desplegado en ECS)
+├── local-gateway/   Nginx que unifica los microservicios bajo un solo origen para pruebas locales
 ├── db/              Scripts SQL por esquema para la instancia RDS (PostgreSQL)
-├── docker-compose.yml   Entorno local: Postgres + Adminer, con plantillas para los microservicios
+├── docker-compose.yml   Entorno local completo: Postgres + Adminer + los 3 microservicios + gateway + frontend
 └── docs/            Documentación del proyecto
 ```
 
@@ -27,26 +28,32 @@ Esta es la estructura de la **Etapa 1** (arquitectura base, identidad federada y
 etapas 2 y 3 agregarán mensajería (RabbitMQ) y streaming (Kafka) sin modificar lo ya construido (ver sección
 4 del plan).
 
-## Estado actual: contratos, no código
+## Estado actual: uno real, dos en contrato
 
-Las carpetas `ms-usuarios/`, `ms-catalogo/` y `ms-pujas/` **no tienen código todavía**. Cada una tiene un
-`README.md` que funciona como contrato: qué responsabilidad tiene el servicio, qué esquema de base de datos
-le pertenece, qué endpoints debe exponer (con rutas, roles, y el JSON exacto de cada request/response), y qué
-llamadas debe hacer a los otros microservicios (con el JSON exacto de esas llamadas también). La idea es que
-cada persona del equipo pueda tomar un microservicio y construirlo **en el stack que prefiera** (Spring Boot,
-Node, .NET, lo que sea) sin tener que coordinar cada detalle en vivo — el contrato entre servicios ya queda
-escrito y las decisiones de diseño ambiguas ya están resueltas.
+`ms-pujas` ya está implementado de verdad (Spring Boot + JPA + Flyway + seguridad dual local/JWT), probado en
+Docker Compose local y desplegado en ECS/Fargate en AWS. `ms-usuarios` y `ms-catalogo` todavía son **stubs
+livianos en Node/Express** (mismo contrato JSON exacto, sin lógica de negocio real) — sirven para poder
+levantar y probar el sistema completo de punta a punta (frontend + gateway + los tres servicios) mientras
+cada equipo termina su implementación definitiva **en el stack que prefiera** (Spring Boot, Node, .NET, lo
+que sea), reemplazando el stub sin tener que tocar el frontend, el gateway local ni la infraestructura de AWS.
 
-Quien implemente un microservicio debe:
+Cada microservicio tiene un `README.md` que funciona como contrato: qué responsabilidad tiene, qué esquema de
+base de datos le pertenece, qué endpoints debe exponer (con rutas, roles, y el JSON exacto de cada
+request/response), y qué llamadas debe hacer a los otros microservicios (con el JSON exacto de esas llamadas
+también) — el contrato entre servicios ya queda escrito y las decisiones de diseño ambiguas ya están
+resueltas.
+
+Quien reemplace un stub por la implementación real debe:
 1. Leer su `README.md` completo antes de empezar.
 2. Elegir stack y anotarlo en el README del servicio.
 3. Si encuentra un punto no cubierto aquí, resolverlo y **documentar la decisión tomada en el mismo README**,
    para que quien construya los servicios vecinos sepa a qué atenerse.
 4. Agregar sus tablas al esquema correspondiente en `db/` (ver [`db/README.md`](db/README.md)).
-5. Agregar un `Dockerfile` a su carpeta y descomentar su bloque en `docker-compose.yml`.
+5. Reemplazar el `Dockerfile` del stub por el de su implementación real en `docker-compose.yml` — el bloque
+   del servicio ya existe y ya está en la misma red que la base de datos, no hace falta descomentar nada.
 
-El frontend lo construye el equipo directamente sobre `frontend/`; no tiene contrato aparte porque consume
-los mismos endpoints documentados abajo, a través del API Gateway.
+El frontend ya está implementado en `frontend/`; no tiene contrato aparte porque consume los mismos endpoints
+documentados abajo, a través del API Gateway.
 
 ## Convenciones de API compartidas
 
@@ -146,16 +153,18 @@ Frontend                ms-pujas                    ms-catalogo
 docker compose up -d
 ```
 
-Esto levanta:
+Esto levanta el entorno completo:
 - **Postgres** en `localhost:5432` (usuario/clave `subastalive`/`subastalive`, base `subastalive`), con los
   tres esquemas (`schema_usuarios`, `schema_catalogo`, `schema_pujas`) creados automáticamente a partir de
-  los scripts en `db/`.
+  los scripts en `db/` — `ms-pujas` además los mantiene al día solo con Flyway al arrancar.
 - **Adminer** en [http://localhost:8080](http://localhost:8080) para explorar la base sin instalar nada
   (servidor: `postgres`, usuario/clave/base: `subastalive`).
-
-Los tres microservicios están dejados como bloques **comentados** en `docker-compose.yml`, listos para
-descomentar apenas cada uno tenga su `Dockerfile` — ya incluyen las variables de entorno esperadas y quedan
-en la misma red que la base de datos.
+- **`ms-pujas`** (Spring Boot real) en el puerto `8083`.
+- **`ms-catalogo`** y **`ms-usuarios`** (stubs Node/Express con el mismo contrato) en `8082` y `8081`.
+- **`local-gateway`** (Nginx) en `localhost:8090` — unifica los tres microservicios bajo un solo origen con
+  CORS habilitado, haciendo de API Gateway local (sin validar JWT — eso lo hace cada microservicio, y el API
+  Gateway real en AWS).
+- **`frontend`** en `localhost:5173`, apuntando al gateway local (`VITE_API_BASE_URL=http://localhost:8090`).
 
 ```bash
 docker compose down       # detiene todo, conserva los datos
@@ -171,10 +180,13 @@ despliegan de forma independiente entre sí, consistente con que cada una escala
 
 > **Nota de diseño:** el plan original (sección 6.3) proponía el frontend como sitio estático en S3 +
 > CloudFront. Se cambió a ECS/Fargate como los microservicios porque el laboratorio de AWS Academy usado para
-> este proyecto no otorga permiso para crear Origin Access Control ni algunas otras piezas de CloudFront
-> (`cloudfront:CreateOriginAccessControl` da `AccessDenied`), mientras que ECR/ECS/ALB sí funcionan sin
-> problema en esta cuenta. El frontend termina siendo, literalmente, "otro contenedor" — un Nginx sirviendo el
-> build de Vite — desplegado igual que los tres microservicios.
+> este proyecto no otorga permiso para usar CloudFront en absoluto — no solo Origin Access Control
+> (`cloudfront:CreateOriginAccessControl` da `AccessDenied`), sino `cloudfront:CreateDistribution` en sí mismo,
+> incluso probando con un origen ALB que no necesita OAC. ECR/ECS/ALB sí funcionan sin problema en esta cuenta.
+> El frontend termina siendo, literalmente, "otro contenedor" — un Nginx sirviendo el build de Vite —
+> desplegado igual que los tres microservicios. El detalle de cómo se resolvió el HTTPS que exige Cognito para
+> el login (sin CloudFront ni dominio propio, con un certificado autofirmado en el ALB) está en
+> [`docs/despliegue-aws.md`](docs/despliegue-aws.md), sección 8.
 
 ### Los cuatro workflows (`deploy-ms-usuarios.yml`, `deploy-ms-catalogo.yml`, `deploy-ms-pujas.yml`, `deploy-frontend.yml`)
 
@@ -189,9 +201,11 @@ la pestaña **Actions** de GitHub):
 3. Ejecuta `aws ecs update-service --force-new-deployment` sobre el servicio de **ECS** correspondiente, que
    vuelve a desplegar la tarea tirando la imagen `latest` recién publicada.
 
-**Importante:** cada workflow asume que ya existe un `Dockerfile` en su carpeta. El de `frontend/` ya está en
-el repo; los de los microservicios se agregan cuando cada uno tenga código — hasta entonces, el workflow
-existe pero falla si se dispara (no hay nada que construir), es intencional.
+**Importante:** cada workflow asume que ya existe un `Dockerfile` en su carpeta. `frontend/` y `ms-pujas/` ya
+lo tienen (`ms-pujas` con su implementación real en Spring Boot, ya probada tanto en Docker Compose local como
+desplegada en ECS/Fargate). `ms-catalogo/` y `ms-usuarios/` traen por ahora un `Dockerfile` de un stub liviano
+en Node/Express (mismo contrato JSON, sin lógica real) — se reemplaza por la implementación definitiva de
+cada equipo sin tocar el workflow ni la infraestructura.
 
 ### Prerrequisitos de infraestructura (manuales, una sola vez, por cada una de las 4 partes)
 
@@ -235,7 +249,7 @@ leerlos sin exponerlos como secretos innecesariamente.
 | `VITE_AUTH_MODE` | Variable | `mock` u `oidc` — ver [`frontend/README.md`](frontend/README.md) |
 | `VITE_USE_MOCKS` | Variable | `true` o `false` |
 | `VITE_API_BASE_URL` | Variable | URL del API Gateway (solo importa si `VITE_USE_MOCKS=false`) |
-| `VITE_COGNITO_AUTHORITY`, `VITE_COGNITO_CLIENT_ID` | Variable | Solo si `VITE_AUTH_MODE=oidc` |
+| `VITE_COGNITO_AUTHORITY`, `VITE_COGNITO_CLIENT_ID`, `VITE_COGNITO_DOMAIN` | Variable | Solo si `VITE_AUTH_MODE=oidc` — el dominio es necesario para que el logout cierre la sesión de verdad, ver [`frontend/README.md`](frontend/README.md) |
 | `VITE_ENTRA_AUTHORITY`, `VITE_ENTRA_CLIENT_ID` | Variable | Solo si `VITE_AUTH_MODE=oidc` |
 
 El registro de ECR (`ECR_REGISTRY`, con forma `<id-de-cuenta>.dkr.ecr.<region>.amazonaws.com`) no se configura

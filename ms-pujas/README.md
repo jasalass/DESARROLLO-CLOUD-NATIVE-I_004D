@@ -1,8 +1,10 @@
 # ms-pujas
 
-> Este microservicio aún no está implementado. Este documento es el **contrato** que debe cumplir, para que
-> quien lo construya (en cualquier stack) pueda hacerlo sin coordinar cada detalle en vivo con el resto del
-> equipo. Ver el plan completo en
+> Este microservicio **ya está implementado** (Java 17 + Spring Boot 3.3.2), probado en Docker Compose local
+> y desplegado de verdad en ECS/Fargate en AWS — ver la checklist al final de este documento y
+> [`../docs/despliegue-aws.md`](../docs/despliegue-aws.md). El resto de este documento sigue siendo el
+> **contrato** de referencia (endpoints, JSON, reglas de negocio) para quien necesite consumirlo o
+> modificarlo. Ver el plan completo en
 > [`../docs/SubastaLive_Plan_de_Proyecto_v3.pdf`](../docs/SubastaLive_Plan_de_Proyecto_v3.pdf) (secciones 5.3, 5.4, 6.2, 6.3, 8.3).
 >
 > Convenciones generales (formato de error, tipos de dato, roles, header de auth) están centralizadas en el
@@ -183,16 +185,20 @@ etapa es síncrona vía HTTP.**
   `ms-analitica` (Etapa 3) calculará métricas en vivo del mismo evento, en paralelo y sin interferirse
   (consumer groups independientes).
 
-## Checklist para quien lo implemente
+## Checklist de implementación
 
-- [ ] Definir el stack.
-- [ ] Modelar la entidad `Puja` según el JSON de arriba (con índice por `subastaId` para calcular el máximo rápido).
-- [ ] Migraciones de `schema_pujas` con Flyway (copiar el `V1__init.sql` de `../db/schema_pujas` a
-      `src/main/resources/db/migration/` — ver `../db/README.md`, sección "Migraciones automáticas").
-- [ ] Validación JWT multi-issuer.
-- [ ] Cliente HTTP hacia `ms-catalogo` (`/subastas/{id}/reglas`) para validar estado antes de aceptar la puja.
-- [ ] Exponer `/health`.
-- [ ] Dockerfile para el `docker-compose.yml` de la raíz.
-- [ ] Repositorio ECR + cluster/service de ECS creados (ver README principal, sección CI/CD) — el pipeline
-      [`../.github/workflows/deploy-ms-pujas.yml`](../.github/workflows/deploy-ms-pujas.yml) ya existe
-      y se activa solo al hacer push a esta carpeta.
+Ya implementado y desplegado — este servicio no está pendiente:
+
+- [x] Stack: Java 17 + Spring Boot 3.3.2.
+- [x] Modelada la entidad `Puja` según el JSON de arriba (con índice por `subastaId` para calcular el máximo rápido).
+- [x] Migraciones de `schema_pujas` con Flyway (`V1__init.sql` en `src/main/resources/db/migration/`).
+- [x] Validación JWT multi-issuer (`SecurityConfig.java`), más un perfil `local` con token simplificado
+      (`local:<sub>:<ROL>`) para probar sin Cognito/Entra ID reales — ver `security/`.
+- [x] Cliente HTTP hacia `ms-catalogo` (`/subastas/{id}/reglas`) para validar estado antes de aceptar la puja.
+- [x] Expone `/health`.
+- [x] Dockerfile, probado en el `docker-compose.yml` de la raíz.
+- [x] Desplegado de verdad en AWS: ECR, ECS/Fargate (subred privada, sin IP pública), ALB con health check —
+      ver [`../docs/despliegue-aws.md`](../docs/despliegue-aws.md) para el paso a paso completo, con los
+      errores reales encontrados y su solución. El pipeline
+      [`../.github/workflows/deploy-ms-pujas.yml`](../.github/workflows/deploy-ms-pujas.yml) despliega
+      automáticamente en cada push a esta carpeta.

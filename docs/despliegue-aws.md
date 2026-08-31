@@ -470,30 +470,156 @@ posterior.
 
 ### Amazon Cognito (postores)
 
+La consola de Cognito cambió a un asistente simplificado — ya no muestra los pasos clásicos
+"Configure sign-in experience / security requirements / ..." por separado, es un único flujo:
+
 1. Consola → **Cognito → User pools → Create user pool**.
-2. Configure sign-in experience: método de inicio de sesión **Email**.
-3. Configure security requirements: política de contraseña por defecto está bien; MFA: **No MFA** (para el
-   laboratorio).
-4. Configure sign-up experience: activa **self-registration**; atributos requeridos: `email`.
-5. Configure message delivery: deja **Send email with Cognito** (suficiente para pruebas).
-6. Integrate your app:
-   - User pool name: `subastalive-postores`.
-   - Hosted authentication pages: **Use the Cognito Hosted UI**. Dominio: `subastalive-<algo-único>`.
-   - Initial app client: público, nombre `subastalive-frontend`. **No generes client secret** (queda
-     desmarcado — es una SPA pública).
-   - Allowed callback URLs: `http://localhost:5173/auth/callback/postor`.
-   - Allowed sign-out URLs: `http://localhost:5173`.
-   - Identity providers: Cognito user pool.
-   - OAuth grant types: **Authorization code grant**.
-   - OpenID Connect scopes: `openid`, `email`, `profile`.
-7. **Review and create → Create user pool**.
-8. Entra al user pool creado → pestaña **App integration** → anota el **Client ID** y el **dominio de Cognito**
-   completo. En **User pool overview**, anota el **User pool ID**.
+2. **Tipo de aplicación**: **Aplicación de una sola página (SPA)** (el frontend es React).
+3. **Nombre de la aplicación**: cámbialo del valor random que trae por defecto a `subastalive-frontend`.
+4. **Opciones para los identificadores de inicio de sesión**: marca solo **Correo electrónico**.
+5. **¿Login social/SAML/OIDC?**: no, déjalo en blanco.
+6. **Autorregistro**: activa **"Habilitar el registro automático"**.
+7. **Atributos necesarios para el inicio de sesión**: marca **email**.
+8. **URL de retorno**: `http://localhost:5173/auth/callback/postor` (agregamos la URL real de AWS más
+   adelante en esta misma sección, una vez que exista).
+9. Continúa y crea. Al terminar, la consola te muestra una guía rápida con código de ejemplo
+   (`react-oidc-context`) — puedes saltártela, el proyecto ya trae su propia integración OIDC
+   (`frontend/src/auth/`). De ese código de ejemplo igual sirve para copiar el **User pool ID** y el
+   **Client ID** que quedaron generados.
+
+Ajustes que este asistente no te deja tocar y hay que revisar después de crear el pool:
+
+10. Arriba de todo, botón **"Renombrar"** → cambia el nombre del pool (queda con uno random tipo
+    "User pool - xxxxx") a `subastalive-postores`.
+11. Menú izquierdo → **"Creación de marca" → "Dominio"** — normalmente ya viene un dominio Cognito creado
+    solo (`https://<algo>.auth.<región>.amazoncognito.com`), producto del asistente rápido. Anótalo
+    completo, con `https://` — se necesita más abajo para el logout real.
+12. Menú izquierdo → **"Aplicaciones" → "Clientes de aplicación"** → entra al cliente
+    `subastalive-frontend` → pestaña **"Páginas de inicio de sesión" → Editar**. Ahí (no en la pantalla
+    principal del cliente) viven las callback URLs, sign-out URLs, grant types y scopes:
+    - **Client secret**: confirma que diga **"Client secret not generated"** (o `-`) — así debe ser para
+      una SPA pública.
+    - **URL de devolución de llamadas permitidas**: debería estar ya `http://localhost:5173/auth/callback/postor`.
+    - **URL de cierre de sesión permitidas**: agrégala si está vacía → `http://localhost:5173`.
+    - **Tipos de concesión de OAuth**: marca **Authorization code grant**.
+    - **Ámbitos de OpenID Connect**: `openid`, `email`, `profile` — si aparece `phone` marcado
+      (lo sugiere el asistente por defecto), desmárcalo.
+13. Anota el **User pool ID** (en "Descripción general" del pool) y el **Client ID** (en el cliente de
+    aplicación) — los necesitas en la sección 11 (Secrets/Variables de GitHub) y en `frontend/.env.local`
+    si quieres probar en local.
 
 Crea un usuario de prueba:
 
-9. **Users → Create user**. Username/email: `postor.prueba@example.com`. Marca "Mark email as verified".
-   Define una contraseña permanente (evita la temporal, para no tener que cambiarla en el primer login).
+14. Menú izquierdo → **"Administración de usuarios" → "Usuarios" → Create user**. Email:
+    `postor.prueba@example.com`. Marca **"Marque la dirección de email como verificada"**. Deja
+    **"No enviar una invitación"**. En la contraseña, elige **"Establecer una contraseña"** y escribe una
+    que cumpla la política (mínimo 8 caracteres, mayúscula, minúscula, número y símbolo — ej. `Contra_12345`).
+
+    > **Cuidado con espacios invisibles en el email al crear el usuario** — si lo pegas desde otro lado,
+    > es fácil arrastrar un espacio al principio o al final. Eso produce un `InvalidParameterException`
+    > genérico al crear el usuario, sin decir explícitamente cuál campo falló. Borra el campo completo y
+    > escribe el email a mano si te pasa.
+    >
+    > **No hay casilla de "contraseña permanente" en este formulario de creación** (versiones anteriores
+    > de la consola sí la tenían). El usuario queda en estado "Force change password" — es normal, no un
+    > error: la primera vez que inicies sesión por el Hosted UI, Cognito te va a pedir definir una
+    > contraseña nueva ahí mismo, como parte del flujo. Si quieres evitarte ese paso, puedes ir a
+    > **Users → tu usuario → Actions → Set password** y ahí sí marcarla como permanente.
+
+### Probar el login de Cognito en local, antes de tocar nada en AWS
+
+Antes de meterte con HTTPS y el ALB, prueba que Cognito funciona de punta a punta corriendo el frontend
+en tu máquina — es mucho más rápido de iterar que redeployando a cada rato:
+
+15. Crea `frontend/.env.local` (no se sube al repo) con:
+    ```
+    VITE_AUTH_MODE=oidc
+    VITE_USE_MOCKS=true
+    VITE_COGNITO_AUTHORITY=https://cognito-idp.<región>.amazonaws.com/<User-pool-ID>
+    VITE_COGNITO_CLIENT_ID=<Client-ID>
+    VITE_COGNITO_DOMAIN=<dominio-de-Cognito-con-https>
+    ```
+16. `cd frontend && npm run dev` → abre `http://localhost:5173` → **Ingresar → Ingresar como postor** →
+    debe redirigirte al Hosted UI real de Cognito (no al login mock instantáneo). Inicia sesión con el
+    usuario de prueba — te va a pedir cambiar la contraseña la primera vez, es esperado. Deberías volver
+    a la app ya autenticado, viendo tu nombre y rol POSTOR en el navbar.
+
+Si esto funciona, el User Pool y el app client están bien configurados — lo que sigue (HTTPS en AWS) es
+pura infraestructura, no configuración de Cognito.
+
+### HTTPS en el ALB del frontend — necesario para probar Cognito en AWS de verdad
+
+Cognito exige que toda callback URL que no sea `localhost`/`127.0.0.1`/`::1` use **HTTPS** — y esto lo
+valida de verdad, no es solo cosmético. El ALB del frontend (sección 10) solo tiene un listener HTTP.
+Sin resolver esto, el frontend desplegado en AWS puede mostrar la app, pero el botón de login falla con
+`Crypto.subtle is available only in secure contexts` (el navegador desactiva la Web Crypto API — que
+`oidc-client-ts` necesita para el PKCE challenge — fuera de un contexto seguro).
+
+**CloudFront no es una opción en este laboratorio.** Ya sabíamos que `cloudfront:CreateOriginAccessControl`
+está bloqueado (nota de la sección 10, para S3), pero intentamos usar CloudFront con el ALB del frontend
+como origen (un origen ELB no necesita OAC, esa restricción es solo para S3) y de todas formas falla:
+
+```
+User: ...assumed-role/voclabs/... is not authorized to perform: cloudfront:CreateDistribution
+```
+
+Es decir, CloudFront está bloqueado por completo en la cuenta, no solo la parte de OAC. Sin un dominio
+propio (para pedir un certificado público válido en ACM) y sin CloudFront (para tener HTTPS gratis con
+`*.cloudfront.net`), la alternativa que queda es un **certificado autofirmado** en el ALB — el navegador
+va a mostrar una advertencia de "conexión no privada" que hay que aceptar una vez, pero el flujo de
+Cognito (que sí exige `https://` en la URL, no que el certificado sea de una CA pública) funciona
+completo después de eso.
+
+1. En tu máquina, genera el certificado (en Git Bash / PowerShell con OpenSSL instalado; en Windows con
+   Git Bash, antepone `MSYS_NO_PATHCONV=1` porque si no MSYS confunde el `/CN=...` con una ruta de
+   archivo):
+   ```bash
+   MSYS_NO_PATHCONV=1 openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 825 -nodes \
+     -subj "/CN=<DNS-del-ALB-del-frontend>"
+   ```
+2. Consola → **Certificate Manager (ACM) → Import a certificate** → pega el contenido de `cert.pem` en
+   **Certificate body** y el de `key.pem` en **Private key** (con las líneas `-----BEGIN/END-----`
+   incluidas). **Certificate chain**: vacío, es autofirmado. **Import**.
+3. **EC2 → Load Balancers → `subastalive-frontend-alb` → Listeners → Add listener**: Protocol **HTTPS**,
+   Port `443`, Default action → Forward to `subastalive-tg-frontend`, **Default SSL/TLS certificate**:
+   **From ACM** → el que acabas de importar.
+4. **EC2 → Security Groups → `subastalive-frontend-alb-sg` → Inbound rules → Add rule**: Type **HTTPS**,
+   puerto 443, Source **Anywhere (0.0.0.0/0)**.
+
+   > **No edites la regla de HTTP existente para "convertirla" en la de HTTPS — agrega una regla nueva.**
+   > Pasó exactamente eso en la práctica: al agregar la regla de 443 se terminó reemplazando sin querer
+   > la de puerto 80, dejando el ALB con **una sola regla** (443) en vez de dos. Sin la regla de 80, el
+   > tráfico HTTP se cuelga en timeout (no da error de conexión rechazada — esa es la pista: un
+   > security group bloqueando silenciosamente se ve como timeout, no como "connection refused"). El
+   > grupo de seguridad debe terminar con **2 reglas**: HTTP/80 y HTTPS/443, ambas `0.0.0.0/0`.
+5. Vuelve a **Cognito → tu user pool → Clientes de aplicación → subastalive-frontend → Páginas de inicio
+   de sesión → Editar** y agrega, sin borrar las de localhost:
+   - Callback: `https://<DNS-del-ALB-del-frontend>/auth/callback/postor`
+   - Sign-out: `https://<DNS-del-ALB-del-frontend>`
+6. Actualiza las Variables de GitHub (`VITE_AUTH_MODE=oidc`, `VITE_COGNITO_AUTHORITY`,
+   `VITE_COGNITO_CLIENT_ID`, `VITE_COGNITO_DOMAIN` — ver la tabla completa en la sección 11) y dispara
+   **Actions → Deploy frontend → Run workflow**.
+7. Prueba en el navegador con `https://` (no `http://`), aceptando la advertencia del certificado.
+
+> **Por qué el logout necesita `VITE_COGNITO_DOMAIN`.** El Hosted UI de Cognito no implementa el
+> `end_session_endpoint` estándar de OIDC — mantiene su propia sesión de SSO en su dominio, separada de
+> la del navegador con la app. `frontend/src/auth/AuthContext.jsx` ya resuelve esto (redirige a
+> `<dominio>/logout?client_id=...&logout_uri=...` y limpia la sesión local de `oidc-client-ts` *antes* de
+> redirigir — si no se limpia antes, al volver de Cognito la app encuentra el usuario todavía guardado en
+> el storage local con el access token vigente, y lo sigue mostrando como autenticado aunque Cognito ya
+> haya cerrado la sesión del lado servidor). Esto ya viene resuelto en el código del repo — solo hace
+> falta cargar la Variable `VITE_COGNITO_DOMAIN` en GitHub para que quede incrustada en el build.
+
+### Microsoft Entra ID (martillero / administrador)
+
+Esto es Azure, no AWS — vía [portal.azure.com](https://portal.azure.com):
+
+1. **Microsoft Entra ID → App registrations → New registration.** Tipo de cuenta: solo tu tenant.
+2. **Redirect URI**, tipo SPA: `http://localhost:5173/auth/callback/staff`.
+3. **App roles → Create app role:** crea `MARTILLERO` y `ADMINISTRADOR`.
+4. **Enterprise applications** → tu app → **Users and groups** → asigna un usuario de prueba a cada rol.
+5. Anota **Application (client) ID** y **Directory (tenant) ID** — la authority es
+   `https://login.microsoftonline.com/<TENANT_ID>/v2.0`.
 
 ### Microsoft Entra ID (martillero / administrador)
 
@@ -631,6 +757,21 @@ existe en ECR) — es esperado, se resuelve en el paso siguiente.
 21. Espera un par de minutos — la tarea de ECS debería pasar a **Running** y el target en
     `subastalive-tg-frontend` a **healthy**. Abre `http://<DNS-del-ALB-frontend>` en el navegador — debe
     cargar SubastaLive.
+
+> **Dos bugs reales de frontend, ya corregidos en el repo, que vale la pena entender por qué existen:**
+> - **`nginx.conf` sirve `index.html` sin `Cache-Control` explícito.** Sin eso, el navegador puede quedarse
+>   con una copia vieja de `index.html` — que apunta a un archivo JS con un hash que ya no existe después
+>   de un nuevo deploy (el hash cambia si el contenido del bundle cambia, por ejemplo al pasar
+>   `VITE_AUTH_MODE` de `mock` a `oidc`). Eso produce exactamente este error en consola: `Failed to load
+>   module script... MIME type text/html` (nginx cae a `index.html` porque el `.js` pedido no existe). La
+>   corrección: `index.html` se sirve con `no-cache, no-store, must-revalidate`, y los archivos bajo
+>   `/assets/` (que sí tienen hash en el nombre) con cache agresivo de un año.
+> - **`main.jsx` dejaba la app en blanco si el Service Worker de MSW fallaba al registrarse.** El arranque
+>   encadenaba `habilitarMocksSiCorresponde().then(() => render(...))` sin `catch` — si `worker.start()`
+>   rechazaba la promesa (nos pasó en la práctica: el certificado autofirmado del ALB, sección 8, hace que
+>   el navegador bloquee el registro del Service Worker con un error de SSL), la app nunca llegaba a
+>   renderizar, sin ningún mensaje visible más que un error en consola. Ahora el fallo se captura y se
+>   loguea, pero la app sigue renderizando con o sin mocks disponibles.
 
 ## 11. Conectar GitHub Actions
 

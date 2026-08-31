@@ -7,8 +7,9 @@ entradas de login diferenciadas por rol:
 - **Martillero / Administrador** → Microsoft Entra ID
 
 Ambas usan OAuth 2.0 / OIDC con flujo Authorization Code + PKCE. El token se adjunta automáticamente a las
-llamadas al backend a través del API Gateway. Diseño únicamente funcional por ahora — sin trabajo visual
-todavía.
+llamadas al backend a través del API Gateway. El login de Cognito ya está probado de punta a punta, en local
+y desplegado en AWS (ver [`../docs/despliegue-aws.md`](../docs/despliegue-aws.md), sección 8) — Entra ID
+todavía está pendiente.
 
 ## Desarrollo local
 
@@ -62,6 +63,11 @@ activo — ambos exponen el mismo `AuthContext` (`session`, `role`, `loginPostor
 - **`oidc`**: usa `oidc-client-ts` con **dos `UserManager` independientes**, uno por proveedor, porque Cognito
   y Entra ID son dos issuers distintos con distintas apps registradas. `loginPostor()`/`loginStaff()` hacen
   `signinRedirect()`; las páginas `/auth/callback/*` completan el flujo con `signinRedirectCallback()`.
+  **El logout de Cognito es un caso especial:** el Hosted UI no expone el `end_session_endpoint` estándar de
+  OIDC, así que `logout()` limpia primero la sesión local de `oidc-client-ts` y recién después redirige a mano
+  al endpoint propietario de Cognito (`<dominio>/logout?client_id=...&logout_uri=...`, armado en
+  `oidcConfig.js`) — si se limpia la sesión local *después* de redirigir (o no se limpia), la app vuelve a
+  mostrar al usuario como autenticado al volver, porque el access token todavía no expiró.
 
 **Pendiente de confirmar una vez existan los recursos reales:** el nombre exacto del claim de rol dentro del
 token (Cognito custom attribute vs. Entra ID app role) — está centralizado en `src/auth/oidcConfig.js`
@@ -79,6 +85,7 @@ VITE_API_BASE_URL=http://localhost:8080
 # Solo si VITE_AUTH_MODE=oidc:
 VITE_COGNITO_AUTHORITY=
 VITE_COGNITO_CLIENT_ID=
+VITE_COGNITO_DOMAIN=       # dominio del Hosted UI, con https:// — necesario para el logout real, ver abajo
 VITE_ENTRA_AUTHORITY=
 VITE_ENTRA_CLIENT_ID=
 ```
@@ -94,10 +101,19 @@ absolutas sobre `VITE_API_BASE_URL`.
 ## Despliegue
 
 Se despliega como **contenedor en ECS/Fargate**, igual que los tres microservicios (no como sitio estático en
-S3+CloudFront — se cambió porque el laboratorio de AWS Academy usado en este proyecto no permite crear Origin
-Access Control de CloudFront). El `Dockerfile` de esta carpeta hace el build de Vite en una etapa y sirve el
-resultado con Nginx (`nginx.conf` incluye el `try_files` necesario para que las rutas de React Router
-funcionen al refrescar la página).
+S3+CloudFront — se cambió porque el laboratorio de AWS Academy usado en este proyecto no permite usar
+CloudFront en absoluto, ni siquiera con un origen ALB que no necesita Origin Access Control). El `Dockerfile`
+de esta carpeta hace el build de Vite en una etapa y sirve el resultado con Nginx —`nginx.conf` incluye el
+`try_files` necesario para que las rutas de React Router funcionen al refrescar la página, y sirve `index.html`
+con `Cache-Control: no-cache` (para que un deploy nuevo no quede pisado por una copia vieja en el navegador,
+mientras que los archivos hasheados bajo `/assets/` sí se cachean agresivo, un año, porque su nombre cambia si
+su contenido cambia).
+
+**Cognito exige HTTPS para el callback en cualquier dominio que no sea `localhost`.** Sin dominio propio ni
+CloudFront disponibles, el ALB del frontend en AWS usa un **certificado autofirmado** importado a ACM — el
+navegador muestra una advertencia que hay que aceptar una vez, pero el login funciona igual. Ver
+[`../docs/despliegue-aws.md`](../docs/despliegue-aws.md), sección 8, para los comandos de OpenSSL y los pasos
+exactos en la consola.
 
 Como las variables `VITE_*` se incrustan en el bundle en tiempo de build (no son variables de entorno del
 contenedor en ejecución), se pasan como `--build-arg` — ver
