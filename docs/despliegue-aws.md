@@ -382,7 +382,10 @@ Edita también `subastalive-rds-sg` (el de la sección 3) → **Add rule**: Type
 
    `SPRING_PROFILES_ACTIVE=local` es intencional: activa el mismo modo de autenticación simplificada
    (`local:<sub>:<ROL>`) que se probó en Docker Compose, para poder desplegar y probar `ms-pujas` en AWS
-   antes de que Cognito/Entra ID existan (sección 8). Estos valores quedan en texto plano en la Task
+   antes de que Cognito/Entra ID existan (sección 8). **Es temporal** — una vez que exista Cognito (sección
+   8) y conectes el API Gateway (sección 9), hay que crear una nueva revisión quitando esta variable y
+   agregando `JWT_ISSUER_URI_COGNITO` (ver la nota al final de la sección 9), para que `ms-pujas` valide JWT
+   reales en vez del token simplificado. Estos valores quedan en texto plano en la Task
    Definition — es una simplificación deliberada para un laboratorio temporal, no un descuido; la
    alternativa más segura es AWS Secrets Manager con `valueFrom` en vez de `value`, fuera del alcance de
    esta guía.
@@ -636,12 +639,17 @@ Esto es Azure, no AWS — vía [portal.azure.com](https://portal.azure.com):
 
 ## 9. Puerta de entrada — API Gateway
 
-1. Consola → **API Gateway → Create API → HTTP API → Build**.
+1. Consola → **API Gateway → Create API → HTTP API → Build**. Nombre: `subastalive-api`.
 2. **Add integration**: Integration type **HTTP**; Method **ANY**; Integration URL:
-   `http://<DNS-del-ALB>` (el que copiaste en la sección 7).
+   `http://<DNS-del-ALB>/{proxy}` (el que copiaste en la sección 7).
 3. **Configure routes**: método **ANY**, path `/{proxy+}`, apuntando a esa integración.
 4. **Configure stages**: deja el stage `$default` con auto-deploy activado.
 5. **Create**. En el resumen de la API, copia la **Invoke URL**.
+
+> **No olvides el `/{proxy}` al final de la Integration URL.** Sin él, la integración HTTP ignora la ruta
+> real que pediste y reenvía *todo* a la raíz del ALB, sin importar qué path hayas pedido — el síntoma es
+> que `/health` y cualquier otra ruta inventada devuelven exactamente la misma respuesta. Con `{proxy}` al
+> final, el segmento capturado por `/{proxy+}` en la ruta se sustituye ahí, y cada path llega a donde debe.
 
 ### Autorizador JWT
 
@@ -670,6 +678,21 @@ Esto es Azure, no AWS — vía [portal.azure.com](https://portal.azure.com):
 > autorizador Lambda que pruebe ambos issuers, o dos autorizadores en rutas separadas. Esta guía prueba el
 > mecanismo con uno solo — la decisión de cuál camino tomar queda documentada en
 > [`ms-catalogo/README.md`](../ms-catalogo/README.md), sección 5.6 del plan.
+
+> **`ms-pujas` necesita salir del perfil `local` para validar JWT reales.** Si el Task Definition sigue con
+> `SPRING_PROFILES_ACTIVE=local` (como en el primer deploy, cuando Cognito todavía no existía), el
+> microservicio usa `LocalTokenAuthFilter` y rechaza cualquier JWT real con `401 NO_AUTENTICADO` — no
+> importa que el autorizador de API Gateway lo haya validado correctamente, la validación de `ms-pujas` es
+> independiente (defensa en profundidad). Hay que crear una nueva revisión de la Task Definition: quita
+> `SPRING_PROFILES_ACTIVE` (o cámbialo a algo distinto de `local`) y agrega `JWT_ISSUER_URI_COGNITO` con el
+> Issuer URL del user pool — la variable la lee `app.security.issuer-uri-cognito` en `application.yml`.
+>
+> **Durante el rollout, vas a ver fallos intermitentes que no son un bug de verdad.** Justo después de hacer
+> `Update service` con la nueva revisión, el ALB reparte tráfico entre la tarea vieja (todavía con
+> `local` activo) y la nueva (ya con JWT real) mientras la vieja termina de drenar — un mismo token real
+> puede dar 401 en un intento y 200 en el siguiente, según a cuál tarea caiga la petición. Antes de
+> sospechar del API Gateway o de la validación JWT, revisa **ECS → Services → Deployments** y confirma que
+> solo quede la revisión nueva corriendo (0 tareas de la revisión anterior) antes de repetir la prueba.
 
 ## 10. Frontend — mismo patrón, su propio ALB
 

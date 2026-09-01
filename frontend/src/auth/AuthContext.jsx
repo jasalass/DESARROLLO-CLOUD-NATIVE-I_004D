@@ -142,7 +142,6 @@ export function AuthProvider({ children }) {
     const rolActual = session?.role;
     setSession(null);
     setStatus("anonymous");
-    await getEntraUserManager().removeUser();
 
     if (rolActual === "POSTOR") {
       // Limpia también la sesión local de oidc-client-ts ANTES de redirigir — si no, al volver de
@@ -150,11 +149,15 @@ export function AuthProvider({ children }) {
       // vigente, dura 60 minutos) y lo sigue tratando como autenticado, aunque Cognito ya haya
       // cerrado la sesión del lado servidor.
       await getCognitoUserManager().removeUser();
+      await getEntraUserManager().removeUser();
       window.location.href = cognitoLogoutUrl();
       return;
     }
 
+    // Entra ID sí expone el end_session_endpoint estándar de OIDC (a diferencia de Cognito), así que
+    // oidc-client-ts se encarga solo de armar la URL de logout y limpiar la sesión local.
     await getCognitoUserManager().removeUser();
+    await getEntraUserManager().signoutRedirect();
   }
 
   const value = useMemo(

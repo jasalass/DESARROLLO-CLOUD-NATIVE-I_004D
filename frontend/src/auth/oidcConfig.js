@@ -32,6 +32,10 @@ export const entraSettings = {
   post_logout_redirect_uri: window.location.origin,
   response_type: "code",
   scope: "openid profile email",
+  // Sin esto, Microsoft reingresa solo con la cuenta que ya tenga sesión activa en el navegador (SSO),
+  // sin dejar elegir otra — un problema real para probar distintos roles (martillero/admin) en la misma
+  // sesión de navegador que usas para administrar el propio tenant de Azure.
+  extraQueryParams: { prompt: "select_account" },
 };
 
 // El nombre exacto del claim de rol dentro del token todavía no está confirmado (depende de cómo se
