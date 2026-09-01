@@ -1,0 +1,14 @@
+# Estado de Terraform — contiene datos sensibles (password de RDS, etc.) en texto plano.
+*.tfstate
+*.tfstate.*
+.terraform/
+
+# Variables reales (contienen el password de RDS) — solo se sube el .example.
+*.auto.tfvars
+terraform.tfvars
+
+# Credenciales del laboratorio, cargadas por sesión — nunca se comitean.
+cargar-credenciales.ps1
+
+# Plan guardado en binario, si se usa `terraform plan -out=...`.
+*.tfplan

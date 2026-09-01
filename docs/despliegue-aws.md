@@ -13,6 +13,12 @@ Actions por ti** una vez que dejes cargados los Secrets. RDS queda en una subred
 conectarse a ella a mano: cada microservicio crea y actualiza su propio esquema solo, con Flyway, al
 arrancar (ver sección 3).
 
+> **¿Ya hiciste esto una vez a mano y quieres repetirlo con menos clics?** Hay una plantilla de
+> Terraform en [`../infra-terraform/`](../infra-terraform/README.md) que crea la misma infraestructura
+> (salvo Entra ID, que vive en Azure) con un solo `terraform apply` — escrita a partir de esta misma
+> guía, con cada gotcha real ya resuelto en el código. Para la primera vez, de todas formas conviene
+> seguir esta guía a mano — entender cada pieza ayuda a defenderla después.
+
 ## Por qué cada uno despliega todo
 
 Es tentador dividir el trabajo así: "yo hago el backend, tú el front, alguien más sube todo a AWS al final".

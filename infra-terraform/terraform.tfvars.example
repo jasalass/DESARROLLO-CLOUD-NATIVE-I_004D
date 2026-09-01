@@ -1,0 +1,7 @@
+# Copiar a terraform.tfvars (no se sube al repo) y completar con valores reales.
+
+db_master_password    = "elige-una-password-segura"
+# Debe ser único en TODO AWS, no solo en tu cuenta. Un truco simple: agregar tu Account ID al final
+# (corre `terraform apply` una vez, si falla por "already exists" copia el account_id del error y
+# agrégalo aquí).
+cognito_domain_prefix = "subastalive-tu-account-id"

@@ -7,7 +7,12 @@ El plan de proyecto completo, con historias de usuario, requisitos y arquitectur
 Para levantar toda la infraestructura de la Etapa 1 en AWS desde cero (red privada, RDS, ECR, ECS, ALB,
 Cognito, Entra ID, API Gateway y el frontend — también como contenedor en ECS), sigue
 [`docs/despliegue-aws.md`](docs/despliegue-aws.md) — está pensada para que cada persona del equipo la haga
-una vez en su propio laboratorio.
+una vez en su propio laboratorio, a mano, por la consola web.
+
+Si ya recorriste esa guía una vez y quieres repetirla en otro laboratorio con menos clics, hay una
+plantilla de Terraform que crea lo mismo (salvo Entra ID, que vive en Azure) en
+[`infra-terraform/`](infra-terraform/README.md) — escrita a partir de esta misma infraestructura ya
+construida y probada a mano, con cada gotcha real ya resuelto en el código.
 
 ## Estructura del monorepo
 
