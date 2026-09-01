@@ -2,7 +2,7 @@
 
 Plataforma cloud native de subastas en línea. Proyecto de la asignatura DSY1107 — Desarrollo Cloud Native I (Duoc UC, sección I_004D).
 
-El plan de proyecto completo, con historias de usuario, requisitos y arquitectura por etapa, está en [`docs/SubastaLive_Plan_de_Proyecto_v3.pdf`](docs/SubastaLive_Plan_de_Proyecto_v3.pdf).
+El plan de proyecto completo, con historias de usuario, requisitos y arquitectura por etapa, está en [`docs/SubastaLive_Plan_de_Proyecto_v4.pdf`](docs/SubastaLive_Plan_de_Proyecto_v4.pdf).
 
 Para levantar toda la infraestructura de la Etapa 1 en AWS desde cero (red privada, RDS, ECR, ECS, ALB,
 Cognito, Entra ID, API Gateway y el frontend — también como contenedor en ECS), sigue
@@ -21,7 +21,7 @@ SubastaLive/
 ├── .github/workflows/   Pipelines CI/CD (build → ECR → deploy ECS), uno por microservicio
 ├── frontend/        SPA — login dual Cognito / Entra ID (implementado, desplegado en ECS)
 ├── ms-usuarios/     Microservicio — perfil de dominio del usuario           (stub liviano Node/Express)
-├── ms-catalogo/     Microservicio — lotes, subastas y estados               (stub liviano Node/Express)
+├── ms-catalogo/     Microservicio — lotes, subastas y estados               (implementado en Spring Boot)
 ├── ms-pujas/        Microservicio — recepción y validación de pujas        (implementado en Spring Boot, desplegado en ECS)
 ├── local-gateway/   Nginx que unifica los microservicios bajo un solo origen para pruebas locales
 ├── db/              Scripts SQL por esquema para la instancia RDS (PostgreSQL)
@@ -33,14 +33,15 @@ Esta es la estructura de la **Etapa 1** (arquitectura base, identidad federada y
 etapas 2 y 3 agregarán mensajería (RabbitMQ) y streaming (Kafka) sin modificar lo ya construido (ver sección
 4 del plan).
 
-## Estado actual: uno real, dos en contrato
+## Estado actual: dos reales, uno en contrato
 
-`ms-pujas` ya está implementado de verdad (Spring Boot + JPA + Flyway + seguridad dual local/JWT), probado en
-Docker Compose local y desplegado en ECS/Fargate en AWS. `ms-usuarios` y `ms-catalogo` todavía son **stubs
-livianos en Node/Express** (mismo contrato JSON exacto, sin lógica de negocio real) — sirven para poder
-levantar y probar el sistema completo de punta a punta (frontend + gateway + los tres servicios) mientras
-cada equipo termina su implementación definitiva **en el stack que prefiera** (Spring Boot, Node, .NET, lo
-que sea), reemplazando el stub sin tener que tocar el frontend, el gateway local ni la infraestructura de AWS.
+`ms-pujas` y `ms-catalogo` ya están implementados de verdad (Spring Boot + JPA + Flyway + seguridad dual
+local/JWT), probados en Docker Compose local; `ms-pujas` además ya está desplegado en ECS/Fargate en AWS.
+`ms-usuarios` todavía es un **stub liviano en Node/Express** (mismo contrato JSON exacto, sin lógica de
+negocio real) — sirve para poder levantar y probar el sistema completo de punta a punta (frontend + gateway +
+los tres servicios) mientras se termina su implementación definitiva **en el stack que se prefiera** (Spring
+Boot, Node, .NET, lo que sea), reemplazando el stub sin tener que tocar el frontend, el gateway local ni la
+infraestructura de AWS.
 
 Cada microservicio tiene un `README.md` que funciona como contrato: qué responsabilidad tiene, qué esquema de
 base de datos le pertenece, qué endpoints debe exponer (con rutas, roles, y el JSON exacto de cada
@@ -164,8 +165,8 @@ Esto levanta el entorno completo:
   los scripts en `db/` — `ms-pujas` además los mantiene al día solo con Flyway al arrancar.
 - **Adminer** en [http://localhost:8080](http://localhost:8080) para explorar la base sin instalar nada
   (servidor: `postgres`, usuario/clave/base: `subastalive`).
-- **`ms-pujas`** (Spring Boot real) en el puerto `8083`.
-- **`ms-catalogo`** y **`ms-usuarios`** (stubs Node/Express con el mismo contrato) en `8082` y `8081`.
+- **`ms-pujas`** y **`ms-catalogo`** (Spring Boot real) en los puertos `8083` y `8082`.
+- **`ms-usuarios`** (stub Node/Express con el mismo contrato) en `8081`.
 - **`local-gateway`** (Nginx) en `localhost:8090` — unifica los tres microservicios bajo un solo origen con
   CORS habilitado, haciendo de API Gateway local (sin validar JWT — eso lo hace cada microservicio, y el API
   Gateway real en AWS).
@@ -206,11 +207,12 @@ la pestaña **Actions** de GitHub):
 3. Ejecuta `aws ecs update-service --force-new-deployment` sobre el servicio de **ECS** correspondiente, que
    vuelve a desplegar la tarea tirando la imagen `latest` recién publicada.
 
-**Importante:** cada workflow asume que ya existe un `Dockerfile` en su carpeta. `frontend/` y `ms-pujas/` ya
-lo tienen (`ms-pujas` con su implementación real en Spring Boot, ya probada tanto en Docker Compose local como
-desplegada en ECS/Fargate). `ms-catalogo/` y `ms-usuarios/` traen por ahora un `Dockerfile` de un stub liviano
-en Node/Express (mismo contrato JSON, sin lógica real) — se reemplaza por la implementación definitiva de
-cada equipo sin tocar el workflow ni la infraestructura.
+**Importante:** cada workflow asume que ya existe un `Dockerfile` en su carpeta. `frontend/`, `ms-pujas/` y
+`ms-catalogo/` ya lo tienen, con su implementación real en Spring Boot — `ms-pujas` ya probada tanto en Docker
+Compose local como desplegada en ECS/Fargate; `ms-catalogo` probada en Docker Compose local, pendiente de
+desplegar. `ms-usuarios/` trae por ahora un `Dockerfile` de un stub liviano en Node/Express (mismo contrato
+JSON, sin lógica real) — se reemplaza por la implementación definitiva sin tocar el workflow ni la
+infraestructura.
 
 ### Prerrequisitos de infraestructura (manuales, una sola vez, por cada una de las 4 partes)
 

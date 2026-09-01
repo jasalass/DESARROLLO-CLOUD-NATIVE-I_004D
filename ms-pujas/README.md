@@ -5,7 +5,7 @@
 > [`../docs/despliegue-aws.md`](../docs/despliegue-aws.md). El resto de este documento sigue siendo el
 > **contrato** de referencia (endpoints, JSON, reglas de negocio) para quien necesite consumirlo o
 > modificarlo. Ver el plan completo en
-> [`../docs/SubastaLive_Plan_de_Proyecto_v3.pdf`](../docs/SubastaLive_Plan_de_Proyecto_v3.pdf) (secciones 5.3, 5.4, 6.2, 6.3, 8.3).
+> [`../docs/SubastaLive_Plan_de_Proyecto_v4.pdf`](../docs/SubastaLive_Plan_de_Proyecto_v4.pdf) (secciones 5.3, 5.4, 6.2, 6.3, 8.3).
 >
 > Convenciones generales (formato de error, tipos de dato, roles, header de auth) están centralizadas en el
 > [README principal](../README.md#convenciones-de-api-compartidas) para no repetirlas en los tres servicios.

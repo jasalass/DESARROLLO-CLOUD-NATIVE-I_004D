@@ -7,7 +7,7 @@
 > construye la versión definitiva. Este documento es el **contrato** que debe cumplir esa versión definitiva,
 > para que quien la construya (en cualquier stack — Spring Boot, Node, .NET, lo que sea) pueda hacerlo sin
 > coordinar cada detalle en vivo con el resto del equipo. Ver el plan completo en
-> [`../docs/SubastaLive_Plan_de_Proyecto_v3.pdf`](../docs/SubastaLive_Plan_de_Proyecto_v3.pdf) (secciones 5.6, 6.2, 6.3).
+> [`../docs/SubastaLive_Plan_de_Proyecto_v4.pdf`](../docs/SubastaLive_Plan_de_Proyecto_v4.pdf) (secciones 5.6, 6.2, 6.3).
 >
 > Convenciones generales (formato de error, tipos de dato, roles, header de auth) están centralizadas en el
 > [README principal](../README.md#convenciones-de-api-compartidas) para no repetirlas en los tres servicios.

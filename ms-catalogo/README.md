@@ -16,7 +16,7 @@
 > Este documento sigue siendo el **contrato**: qué responsabilidad tiene el servicio, qué esquema de base de
 > datos le pertenece, qué endpoints expone (rutas, roles, JSON exacto) y qué llama a otros microservicios.
 > Ver el plan completo en
-> [`../docs/SubastaLive_Plan_de_Proyecto_v3.pdf`](../docs/SubastaLive_Plan_de_Proyecto_v3.pdf) (secciones 5.5, 6.2, 6.3, 7.3).
+> [`../docs/SubastaLive_Plan_de_Proyecto_v4.pdf`](../docs/SubastaLive_Plan_de_Proyecto_v4.pdf) (secciones 5.5, 6.2, 6.3, 7.3).
 >
 > Convenciones generales (formato de error, tipos de dato, roles, header de auth) están centralizadas en el
 > [README principal](../README.md#convenciones-de-api-compartidas) para no repetirlas en los tres servicios.

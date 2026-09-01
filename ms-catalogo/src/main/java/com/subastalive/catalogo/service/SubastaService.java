@@ -15,6 +15,7 @@ import com.subastalive.catalogo.web.dto.LoteDto;
 import com.subastalive.catalogo.web.dto.LoteResumenDto;
 import com.subastalive.catalogo.web.dto.SubastaDetalleDto;
 import com.subastalive.catalogo.web.dto.SubastaResumenDto;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -94,7 +95,14 @@ public class SubastaService {
 
         Subasta subasta = new Subasta(UUID.randomUUID(), lote.getId(), EstadoSubasta.PROGRAMADA,
                 request.fechaApertura(), request.fechaCierre());
-        return subastaRepository.save(subasta);
+        try {
+            return subastaRepository.save(subasta);
+        } catch (DataIntegrityViolationException e) {
+            // Ventana de carrera entre el existsBy... de arriba y este insert: el índice único parcial
+            // de la base (uq_subasta_activa_por_lote) es la garantía real; esto solo evita que dos
+            // requests concurrentes sobre el mismo lote terminen en un 500 en vez del 409 esperado.
+            throw new LoteYaEnSubastaException(lote.getId());
+        }
     }
 
     /** RF-18 — transiciona el estado de una subasta según la máquina de estados (ver EstadoSubasta). */
