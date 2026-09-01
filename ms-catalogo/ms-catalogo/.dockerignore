@@ -1,4 +1,7 @@
-node_modules/
+target/
+.idea/
+*.iml
+.vscode/
 .git/
 .gitignore
 README.md

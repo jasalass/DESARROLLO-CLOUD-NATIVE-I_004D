@@ -1,12 +1,21 @@
 # ms-catalogo
 
-> Este microservicio todavía no tiene su implementación real. Esta carpeta trae por ahora un **stub liviano
-> en Node/Express** (`src/server.js`) que respeta el contrato JSON exacto de abajo pero sin lógica de negocio
-> real (sin Flyway, sin validación JWT, sin persistencia más allá de datos en memoria) — sirve únicamente
-> para poder levantar y probar el sistema completo (frontend + gateway + los tres servicios) mientras se
-> construye la versión definitiva. Este documento es el **contrato** que debe cumplir esa versión definitiva,
-> para que quien la construya (en cualquier stack) pueda hacerlo sin coordinar cada detalle en vivo con el
-> resto del equipo. Ver el plan completo en
+> **Implementación real: Spring Boot + JPA + Flyway + seguridad dual local/JWT**, mismo patrón que
+> `ms-pujas` (ver su código para el mismo estilo de seguridad, manejo de errores, etc.). Reemplaza al stub
+> liviano en Node/Express que traía esta carpeta antes — el contrato HTTP de abajo no cambió.
+>
+> Decisiones tomadas que no estaban explícitas en este README (documentadas acá para que el resto del
+> equipo sepa a qué atenerse, según el punto 3 del README principal):
+> - `fechaCierre` debe ser estrictamente posterior a `fechaApertura` en `POST /subastas`; si no, `400`
+>   con `codigo: "VALIDACION"` (`detalles.campo = "fechaCierre"`). La tabla ya tenía el `CHECK` a nivel de
+>   base de datos; esto solo evita que ese `CHECK` termine devolviendo un `500` genérico.
+> - `PATCH /subastas/{id}/estado` solo valida el **rol** (Martillero o Administrador), no la propiedad del
+>   lote — a diferencia de `POST /subastas`, que sí exige que el Martillero sea dueño del lote. El README no
+>   lo pedía explícitamente para el PATCH, así que se dejó igual de permisivo que como está escrito arriba.
+>
+> Este documento sigue siendo el **contrato**: qué responsabilidad tiene el servicio, qué esquema de base de
+> datos le pertenece, qué endpoints expone (rutas, roles, JSON exacto) y qué llama a otros microservicios.
+> Ver el plan completo en
 > [`../docs/SubastaLive_Plan_de_Proyecto_v3.pdf`](../docs/SubastaLive_Plan_de_Proyecto_v3.pdf) (secciones 5.5, 6.2, 6.3, 7.3).
 >
 > Convenciones generales (formato de error, tipos de dato, roles, header de auth) están centralizadas en el
@@ -245,15 +254,51 @@ etapa es síncrona vía HTTP.**
 
 ## Checklist para quien lo implemente
 
-- [ ] Definir el stack.
-- [ ] Modelar entidades `Lote` y `Subasta` según el JSON de arriba, con su máquina de estados.
-- [ ] Migraciones de `schema_catalogo` con Flyway (copiar el `V1__init.sql` de `../db/schema_catalogo` a
-      `src/main/resources/db/migration/` — ver `../db/README.md`, sección "Migraciones automáticas").
-- [ ] Validación JWT multi-issuer + autorización por rol.
-- [ ] Scheduler de cierre automático al vencer el plazo.
-- [ ] Cliente HTTP hacia `ms-pujas` para enriquecer `GET /subastas/{id}`.
-- [ ] Exponer `/health`.
-- [ ] Dockerfile para el `docker-compose.yml` de la raíz.
+- [x] Definir el stack. → **Spring Boot 3.3 + Java 17 + JPA + Flyway** (idéntico a `ms-pujas`).
+- [x] Modelar entidades `Lote` y `Subasta` según el JSON de arriba, con su máquina de estados
+      (`domain/EstadoSubasta.java`).
+- [x] Migraciones de `schema_catalogo` con Flyway (`src/main/resources/db/migration/V1__init.sql`, copiado
+      de `../db/schema_catalogo` — ver `../db/README.md`, sección "Migraciones automáticas").
+- [x] Validación JWT multi-issuer + autorización por rol (`security/`, mismo patrón dual local/JWT que
+      `ms-pujas`: perfil `local` usa `LocalTokenAuthFilter`, cualquier otro perfil valida JWT real contra
+      Cognito/Entra ID en `SecurityConfig`).
+- [x] Scheduler de cierre automático al vencer el plazo (`scheduler/CierreAutomaticoScheduler.java`, cada
+      30s por defecto, configurable con `CIERRE_AUTOMATICO_INTERVALO_MS`).
+- [x] Cliente HTTP hacia `ms-pujas` para enriquecer `GET /subastas/{id}` (`pujas/PujasClient.java`, nunca
+      lanza excepción hacia arriba — ver la decisión tomada más arriba sobre no fallar el endpoint).
+- [x] Exponer `/health`.
+- [x] Dockerfile para el `docker-compose.yml` de la raíz (ya actualizado con las variables `DB_*` y
+      `SPRING_PROFILES_ACTIVE: local`, igual que el bloque de `ms-pujas`).
 - [ ] Repositorio ECR + cluster/service de ECS creados (ver README principal, sección CI/CD) — el pipeline
       [`../.github/workflows/deploy-ms-catalogo.yml`](../.github/workflows/deploy-ms-catalogo.yml) ya existe
-      y se activa solo al hacer push a esta carpeta.
+      y se activa solo al hacer push a esta carpeta. **Pendiente**: crearlos a mano en la consola de AWS
+      (esto no se puede hacer desde el código).
+
+## Cómo levantarlo
+
+**Con Docker Compose (recomendado, junto al resto del sistema):**
+```bash
+docker compose up -d --build
+```
+Esto reconstruye la imagen de `ms-catalogo` con la implementación real y la levanta en el puerto `8082`,
+ya conectada a Postgres con las tablas creadas automáticamente por Flyway.
+
+**Suelto, con Maven (requiere Postgres corriendo en `localhost:5432`, ver `db/README.md`):**
+```bash
+cd ms-catalogo
+mvn spring-boot:run -Dspring-boot.run.profiles=local
+```
+
+**Probar un endpoint** (con el token simplificado del perfil `local`, formato `local:<sub>:<ROL>` — ver
+`security/LocalTokenAuthFilter.java`):
+```bash
+curl -H "Authorization: Bearer local:11111111-1111-1111-1111-111111111111:MARTILLERO" \
+     -H "Content-Type: application/json" \
+     -X POST http://localhost:8082/lotes \
+     -d '{"titulo":"Reloj antiguo","descripcion":"Funcionando","precioBase":20000,"incrementoMinimo":1000}'
+```
+
+**Tests:**
+```bash
+mvn test
+```

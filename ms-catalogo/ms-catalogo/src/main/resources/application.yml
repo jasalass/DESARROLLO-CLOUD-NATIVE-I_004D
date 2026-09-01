@@ -1,0 +1,35 @@
+server:
+  port: ${SERVER_PORT:8082}
+
+spring:
+  application:
+    name: ms-catalogo
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:subastalive}}
+    username: ${DB_USERNAME:subastalive}
+    password: ${DB_PASSWORD:subastalive}
+    hikari:
+      maximum-pool-size: ${DB_POOL_MAX_SIZE:5}
+
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        default_schema: schema_catalogo
+
+  flyway:
+    schemas: schema_catalogo
+    default-schema: schema_catalogo
+    create-schemas: true
+
+app:
+  ms-pujas:
+    base-url: ${MS_PUJAS_BASE_URL:http://localhost:8083}
+  security:
+    issuer-uri-cognito: ${JWT_ISSUER_URI_COGNITO:}
+    issuer-uri-entra: ${JWT_ISSUER_URI_ENTRA:}
+  scheduler:
+    cierre-automatico-intervalo-ms: ${CIERRE_AUTOMATICO_INTERVALO_MS:30000}
