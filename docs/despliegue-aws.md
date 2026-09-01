@@ -859,11 +859,72 @@ A partir de acá, un `git push` a cada carpeta dispara su propio pipeline — ve
 
 ## 12. Repetirlo con ms-catalogo y ms-usuarios
 
-Todo lo de las secciones 5 a 7 se repite igual, cambiando el nombre por `ms-catalogo` y `ms-usuarios` (los
-stubs de este repo, ya con su propio `Dockerfile` — mismo trato que `ms-pujas`, sin placeholder). Una
-diferencia real de `ms-catalogo` que vale la pena anotar ahora: su contrato expone **dos** familias de rutas
-(`/subastas/*` y `/lotes/*`), así que en el paso de API Gateway necesitas dos rutas apuntando al mismo target
-group — no una sola, como en el ejemplo de `ms-pujas`.
+### Decisión: un solo ALB compartido para los tres microservicios, no uno por cada uno
+
+Las secciones 5 a 7 crearon un ALB propio (`subastalive-alb`) para `ms-pujas`. Para `ms-catalogo` y
+`ms-usuarios`, **no se repite ese paso** — se reutiliza el mismo `subastalive-alb`, agregando un target
+group y una regla de listener por path para cada uno. La razón: ninguno de los tres microservicios lo
+alcanza el navegador directamente (siempre pasan por el API Gateway, o por llamadas internas
+servicio-a-servicio), así que no hay ningún motivo real para pagar por 3 ALBs separados corriendo todo el
+tiempo — un ALB nuevo por microservicio sí tendría sentido si alguno necesitara su propio dominio, su propio
+certificado, o reglas de listener que chocaran entre sí (como pasa con el frontend, que sí tiene su propio
+ALB por eso).
+
+1. **ECR**: crea igual un repo por servicio — `subastalive/ms-catalogo`, `subastalive/ms-usuarios` (sección 5).
+2. **Security group**: no crees uno nuevo — agrégale a `subastalive-ecs-sg` una regla más por cada puerto
+   nuevo (Custom TCP, puerto `8082` para `ms-catalogo` y `8081` para `ms-usuarios`, Source
+   `subastalive-alb-sg` en ambas). Debe terminar con 3 reglas en total (8083, 8082, 8081).
+3. **Target groups**: crea uno por servicio (`subastalive-tg-catalogo` puerto 8082, `subastalive-tg-usuarios`
+   puerto 8081), Target type IP, health check `/health`, **umbral en buen estado 2** (la lección de la
+   sección 6-7 — no lo dejes en el 5 por defecto).
+4. **Reglas de listener en `subastalive-alb` → HTTP:80**: **EC2 → Load Balancers → subastalive-alb →
+   Listeners → HTTP:80 → Manage rules → Add rule** por cada servicio:
+   - `ruta-catalogo`: condición Path = `/subastas*` **o** `/lotes*` (dos valores en la misma condición — el
+     contrato de `ms-catalogo` expone ambas familias de rutas) → Forward to `subastalive-tg-catalogo`.
+   - `ruta-usuarios`: condición Path = `/usuarios*` → Forward to `subastalive-tg-usuarios`.
+   - La consola pide una **prioridad** numérica única por regla (no puede repetirse). La regla **por
+     defecto** (sin condición, la que ya reenvía a `subastalive-tg-pujas`) se evalúa siempre al final, sin
+     importar el número — no hace falta tocarla, sigue capturando todo lo que no matchee las rutas nuevas.
+5. **Task Definition** por servicio (sección 6, sin el ALB — eso ya quedó resuelto en el paso 4): Family
+   `subastalive-ms-catalogo`/`subastalive-ms-usuarios`, LabRole, imagen escrita a mano (`:latest`, todavía no
+   existe la primera vez), puerto del contenedor `8082`/`8081`, variables `SERVER_PORT` y
+   `MS_PUJAS_BASE_URL=http://<DNS-de-subastalive-alb>` (las llamadas internas a `ms-pujas` también pasan por
+   el mismo ALB, sin necesitar Service Discovery aparte).
+6. **Service de ECS** por servicio: subredes privadas, `subastalive-ecs-sg`, Public IP OFF, Load balancing →
+   **usar un ALB existente** → `subastalive-alb` → **usar un listener existente** → `HTTP:80` → **usar un
+   target group existente** → el que corresponda. Grace period `60` segundos (Node/Express arranca rápido).
+
+### Probar el enrutamiento por path
+
+`GET /health` **no sirve** para probar esto — no matchea ninguna regla de path nueva, así que siempre cae en
+la regla por defecto y llega a `ms-pujas`, sin importar de qué servicio se trate (el health check de cada
+Target Group sí funciona bien, porque no pasa por las reglas del listener — pega directo al contenedor). Para
+confirmar el enrutamiento real, usa una ruta propia de cada contrato:
+
+```bash
+curl http://<DNS-de-subastalive-alb>/subastas    # -> ms-catalogo
+curl http://<DNS-de-subastalive-alb>/usuarios/me # -> ms-usuarios
+curl http://<DNS-de-subastalive-alb>/pujas       # -> ms-pujas (regla por defecto)
+```
+
+### API Gateway — no hace falta tocar nada
+
+A diferencia de lo que se podría pensar, **el `/{proxy+}` único de la sección 9 ya sirve para los tres
+microservicios, sin agregar rutas ni integraciones nuevas.** La razón es la misma decisión de la sección
+anterior: como el ALB compartido hace el enrutamiento por path él mismo, el API Gateway solo necesita
+autenticar la petición y reenviarla tal cual a `subastalive-alb` — el ALB decide a qué microservicio va,
+usando las reglas de listener que ya creaste. Probado en la práctica:
+
+```bash
+curl https://<Invoke-URL>/subastas    -H "Authorization: Bearer <token>"  # -> ms-catalogo, 200
+curl https://<Invoke-URL>/pujas       -H "Authorization: Bearer <token>"  # -> ms-pujas, 200
+curl https://<Invoke-URL>/usuarios/me -H "Authorization: Bearer <token>"  # -> ms-usuarios
+```
+
+Si en algún momento futuro alguno de los tres necesitara su **propio** ALB (por ejemplo, si necesita reglas
+de listener que choquen con las de los otros, o quedar en una red separada), ahí sí habría que agregar una
+integración y una ruta por prefijo apuntando a ese ALB nuevo — pero mientras compartan `subastalive-alb`, no
+hace falta.
 
 ## 13. Costos y limpieza
 
@@ -873,36 +934,79 @@ trabajando, apaga en este orden (el inverso al que construiste), todo desde la c
 
 1. **ECS** → cada Service (`ms-pujas`, `ms-catalogo`, `ms-usuarios`, `frontend`) → **Update service** →
    Desired tasks `0` → guarda, espera, luego **Delete service**. Después, **Delete cluster**.
-2. **EC2 → Load Balancers** → borra `subastalive-alb` y `subastalive-frontend-alb`. Luego **Target Groups**
-   → borra `subastalive-tg-pujas`, `subastalive-tg-frontend` y los del resto de microservicios.
-3. **API Gateway** → selecciona la API → **Delete**.
+2. **EC2 → Load Balancers** → borra `subastalive-alb` (el compartido de los 3 backends) y
+   `subastalive-frontend-alb` — solo 2 ALBs en total, no uno por microservicio (ver sección 12). Borrar el
+   ALB elimina sus listeners y reglas de path solo; los **Target Groups** hay que borrarlos aparte:
+   `subastalive-tg-pujas`, `subastalive-tg-catalogo`, `subastalive-tg-usuarios`, `subastalive-tg-frontend`.
+3. **API Gateway** → selecciona la API → **Delete** (una sola API sirve a los 3 microservicios, no hay que
+   borrar nada más ahí).
 4. **RDS** → selecciona `subastalive-db` → **Actions → Delete** → desmarca "Create final snapshot" →
    confirma escribiendo `delete me`.
 5. **Cognito** → selecciona el user pool → **Delete user pool**.
-6. **VPC → NAT Gateways** → selecciona `subastalive-nat` → **Delete** (tarda unos minutos).
-7. **VPC → Elastic IPs** → **Release** la que se usó para el NAT (una vez borrado, ya no está asociada, pero
+6. **Entra ID** (Azure, no AWS) — opcional: **App registrations → subastalive-staff → Delete**, si quieres
+   dejar también el tenant de Azure limpio. No tiene costo por hora como los recursos de AWS, así que no es
+   urgente.
+7. **VPC → NAT Gateways** → selecciona `subastalive-nat` → **Delete** (tarda unos minutos).
+8. **VPC → Elastic IPs** → **Release** la que se usó para el NAT (una vez borrado, ya no está asociada, pero
    sigue existiendo — y las IPs elásticas sin usar también tienen costo).
-8. **VPC → Route Tables** → borra `subastalive-private-rt`.
-9. **VPC → Subnets** → borra `subastalive-private-1a` y `subastalive-private-1b`.
-10. **EC2 → Security Groups** → borra todos los `subastalive-*-sg` (una vez que nada los use).
-11. **ECR** — opcional: borra los repositorios si no los vas a seguir usando.
+9. **VPC → Route Tables** → borra `subastalive-private-rt`.
+10. **VPC → Subnets** → borra `subastalive-private-1a` y `subastalive-private-1b`.
+11. **EC2 → Security Groups** → borra todos los `subastalive-*-sg` (una vez que nada los use) —
+    `subastalive-ecs-sg` es compartido por los 3 backends, bórralo solo cuando los 3 Services ya no existan.
+12. **ECR** — opcional: borra los repositorios si no los vas a seguir usando.
+13. **Certificate Manager (ACM)** — opcional: borra el certificado autofirmado del frontend.
+14. **GitHub** — no hace falta borrar los Secrets/Variables del repositorio; quedan listos para la próxima
+    vez (las credenciales del laboratorio las vas a tener que actualizar igual, porque expiran).
 
 La próxima vez que retomes, repites la sección 2 (subredes + NAT) y la sección 3 sin volver a aplicar nada
 manualmente — si borraste RDS, la próxima vez que despliegues cada microservicio, Flyway vuelve a crear su
-esquema solo.
+esquema solo. Cognito y Entra ID si los borraste hay que rehacerlos desde cero (nuevo User Pool ID / Client
+ID / Tenant), lo que significa volver a actualizar las Variables de GitHub y `frontend/.env.local` con los
+valores nuevos.
 
 ## Checklist final
 
-- [ ] VPC con 2 subredes privadas y NAT Gateway `Available`
-- [ ] RDS sin acceso público, sin ninguna regla de entrada abierta salvo la de `subastalive-ecs-sg`
-- [ ] Imagen `ms-pujas` construida, en ECR, corriendo en ECS en subred privada (sin IP pública)
-- [ ] Port mapping de la Task Definition en `8083` (no en el `80` que precarga la consola por defecto)
-- [ ] Target del Target Group en estado **healthy** (no "Unhealthy — Request timed out")
-- [ ] `http://<DNS-del-ALB>/health` responde `ms-pujas up` en el navegador
-- [ ] La Invoke URL del API Gateway da 401 sin token (visto en DevTools) y 200 con el `id_token` de Cognito (visto en Postman)
-- [ ] Usuario de prueba creado en Cognito; login **y logout** probados de punta a punta (el logout debe pedir credenciales de nuevo, no re-entrar solo)
-- [ ] App registrada y roles creados en Entra ID (pendiente)
-- [ ] Frontend corriendo en ECS detrás de su propio ALB, con **HTTPS** (certificado autofirmado importado a ACM) — Cognito exige `https://` en el callback para cualquier dominio que no sea `localhost`
-- [ ] Security group del ALB del frontend con **2 reglas**: HTTP/80 y HTTPS/443 (fácil perder la de 80 sin querer al agregar la de 443)
-- [ ] Secrets y Variables cargados en GitHub, incluyendo `VITE_COGNITO_DOMAIN`; un push dispara el workflow correspondiente
-- [ ] Sabes en qué orden apagar todo cuando termines (empezando por el NAT Gateway)
+**Red y base de datos:**
+- [x] VPC con 2 subredes privadas y NAT Gateway `Available`
+- [x] `subastalive-private-rt` con ruta `0.0.0.0/0 → subastalive-nat` — revisar de nuevo si se recreó alguna subred (se pierde la asociación)
+- [x] RDS sin acceso público, sin ninguna regla de entrada abierta salvo la de `subastalive-ecs-sg`
+
+**`ms-pujas` (el primer microservicio, real desde el día uno):**
+- [x] Imagen construida, en ECR, corriendo en ECS en subred privada (sin IP pública)
+- [x] Port mapping de la Task Definition en `8083` (no en el `80` que precarga la consola por defecto)
+- [x] Target del Target Group en estado **healthy**, con umbral en buen estado `2` y grace period `240` (Spring Boot tarda ~90s en arrancar)
+- [x] `http://<DNS-del-ALB>/health` responde `ms-pujas up`
+- [x] Cambiado del perfil `local` a `JWT_ISSUER_URI_COGNITO` una vez que Cognito existió — valida JWT reales, no el token simplificado
+
+**`ms-catalogo` y `ms-usuarios` (stubs, mismo patrón de infraestructura):**
+- [x] Repos en ECR, Task Definitions con `SERVER_PORT` y `MS_PUJAS_BASE_URL` apuntando al ALB compartido
+- [x] Comparten `subastalive-ecs-sg` (3 reglas: 8083/8082/8081, todas desde `subastalive-alb-sg`) — no se creó un security group por servicio
+- [x] Comparten `subastalive-alb` — no un ALB por microservicio — con reglas de listener por path (`/subastas*`+`/lotes*` → `ms-catalogo`, `/usuarios*` → `ms-usuarios`, todo lo demás → `ms-pujas` por defecto)
+- [x] Enrutamiento por path probado con curl contra cada ruta real (no contra `/health`, que siempre cae en la regla por defecto)
+
+**API Gateway:**
+- [x] La Invoke URL da 401 sin token (visto en DevTools/curl) y 200 con el `id_token` de Cognito
+- [x] El mismo `/{proxy+}` sirve a los 3 microservicios sin rutas ni integraciones adicionales, gracias al ALB compartido
+
+**Identidad — Cognito (postores):**
+- [x] Usuario de prueba creado; login **y logout** probados de punta a punta, en local y en AWS (el logout debe pedir credenciales de nuevo, no re-entrar solo)
+- [x] `VITE_COGNITO_DOMAIN` configurado — sin él, el logout redirige a una URL rota
+
+**Identidad — Entra ID (martillero/administrador):**
+- [x] App registration con 2 app roles (`MARTILLERO`, `ADMINISTRADOR`); usuarios de prueba asignados a cada uno
+- [x] `extraQueryParams: { prompt: "select_account" }` en la config de Entra — sin esto, el navegador reingresa solo con la sesión de Azure ya activa (típico si usas la misma cuenta para administrar el tenant y para probar el login)
+- [x] Logout real con `signoutRedirect()` (Entra sí expone el `end_session_endpoint` estándar de OIDC, a diferencia de Cognito) — probado de punta a punta, en local y en AWS
+
+**Frontend:**
+- [x] Corriendo en ECS detrás de su propio ALB (distinto del compartido de los backends), con **HTTPS** vía certificado autofirmado importado a ACM — Cognito y Entra ID exigen `https://` en el callback para cualquier dominio que no sea `localhost`
+- [x] Security group del ALB del frontend con **2 reglas**: HTTP/80 y HTTPS/443 (fácil perder la de 80 sin querer al agregar la de 443 editando en vez de agregar)
+- [x] `nginx.conf` sirve `index.html` con `Cache-Control: no-cache` — sin esto, el navegador puede quedar con una versión vieja que referencia un bundle JS que ya no existe tras un redeploy
+- [x] `main.jsx` no bloquea el render de la app si el Service Worker de MSW falla al registrarse (pasa con el certificado autofirmado)
+
+**CI/CD:**
+- [x] Secrets y Variables cargados en GitHub para los 4 workflows (incluyendo `VITE_COGNITO_DOMAIN`, `VITE_ENTRA_AUTHORITY`, `VITE_ENTRA_CLIENT_ID`); cada push a su carpeta dispara el workflow correspondiente
+- [x] Sabes en qué orden apagar todo cuando termines (empezando por el NAT Gateway)
+
+**Pendiente, fuera del alcance de esta guía de infraestructura:**
+- [ ] `ms-catalogo` y `ms-usuarios` siguen siendo stubs sin persistencia real ni validación JWT — reemplazarlos no debería requerir tocar nada de lo de arriba
+- [ ] Rama `feature/ms-usuarios` de un compañero con una implementación real parcial, pendiente de rehacer con historia de git correcta antes de integrar
