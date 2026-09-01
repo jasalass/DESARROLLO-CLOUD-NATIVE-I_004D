@@ -1,0 +1,74 @@
+# Build + push a ECR + despliegue en ECS para el frontend — mismo patrón que los microservicios
+# (deploy-ms-usuarios.yml, deploy-ms-catalogo.yml, deploy-ms-pujas.yml), no S3+CloudFront.
+#
+# Se activa con push a main que toque algo dentro de frontend/ (o manualmente desde la pestaña Actions).
+# Requiere que frontend/Dockerfile exista (ya está en el repo) y que el ECR/ECS/ALB del frontend estén
+# creados — ver docs/despliegue-aws.md.
+#
+# Las variables VITE_* son de build (Vite las incrusta en el bundle, no son variables de entorno del
+# contenedor en ejecución), así que se pasan como --build-arg tomadas de Variables del repositorio.
+
+name: Deploy frontend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-frontend-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY_FRONTEND }}
+  ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+  ECS_SERVICE: ${{ vars.ECS_SERVICE_FRONTEND }}
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar credenciales AWS (laboratorio AWS Academy — ver README)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login a Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag y push de la imagen a ECR
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build \
+            --build-arg VITE_AUTH_MODE="${{ vars.VITE_AUTH_MODE }}" \
+            --build-arg VITE_USE_MOCKS="${{ vars.VITE_USE_MOCKS }}" \
+            --build-arg VITE_API_BASE_URL="${{ vars.VITE_API_BASE_URL }}" \
+            --build-arg VITE_COGNITO_AUTHORITY="${{ vars.VITE_COGNITO_AUTHORITY }}" \
+            --build-arg VITE_COGNITO_CLIENT_ID="${{ vars.VITE_COGNITO_CLIENT_ID }}" \
+            --build-arg VITE_COGNITO_DOMAIN="${{ vars.VITE_COGNITO_DOMAIN }}" \
+            --build-arg VITE_ENTRA_AUTHORITY="${{ vars.VITE_ENTRA_AUTHORITY }}" \
+            --build-arg VITE_ENTRA_CLIENT_ID="${{ vars.VITE_ENTRA_CLIENT_ID }}" \
+            -t "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
+            -t "$ECR_REGISTRY/$ECR_REPOSITORY:latest" \
+            ./frontend
+          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:latest"
+
+      - name: Forzar nuevo despliegue en ECS
+        run: |
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --force-new-deployment

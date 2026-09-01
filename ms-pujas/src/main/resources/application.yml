@@ -1,0 +1,33 @@
+server:
+  port: ${SERVER_PORT:8083}
+
+spring:
+  application:
+    name: ms-pujas
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:subastalive}}
+    username: ${DB_USERNAME:subastalive}
+    password: ${DB_PASSWORD:subastalive}
+    hikari:
+      maximum-pool-size: ${DB_POOL_MAX_SIZE:5}
+
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        default_schema: schema_pujas
+
+  flyway:
+    schemas: schema_pujas
+    default-schema: schema_pujas
+    create-schemas: true
+
+app:
+  ms-catalogo:
+    base-url: ${MS_CATALOGO_BASE_URL:http://localhost:8082}
+  security:
+    issuer-uri-cognito: ${JWT_ISSUER_URI_COGNITO:}
+    issuer-uri-entra: ${JWT_ISSUER_URI_ENTRA:}
