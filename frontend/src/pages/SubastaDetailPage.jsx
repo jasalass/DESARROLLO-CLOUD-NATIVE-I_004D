@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { useAsync } from "../hooks/useAsync";
 import { obtenerSubasta, cambiarEstadoSubasta } from "../api/catalogoApi";
 import { listarPujasDeSubasta } from "../api/pujasApi";
@@ -22,18 +22,36 @@ const ESTADO_LABEL = {
 
 export function SubastaDetailPage() {
   const { id } = useParams();
-  const { session, role } = useAuth();
+  const { session, role, isAuthenticated } = useAuth();
   const [version, setVersion] = useState(0);
 
-  const cargarSubasta = useCallback(() => obtenerSubasta(id, session?.accessToken), [id, session?.accessToken, version]);
-  const { data: subasta, loading, error } = useAsync(cargarSubasta, [id, session?.accessToken, version]);
+  // Sin sesión no se llama a la API (evita el 401 esperado por RF-29) — se muestra un CTA a loguearse.
+  const cargarSubasta = useCallback(
+    () => (isAuthenticated ? obtenerSubasta(id, session?.accessToken) : Promise.resolve(null)),
+    [id, isAuthenticated, session?.accessToken, version]
+  );
+  const { data: subasta, loading, error } = useAsync(cargarSubasta, [id, isAuthenticated, session?.accessToken, version]);
 
-  const cargarPujas = useCallback(() => listarPujasDeSubasta(id, session?.accessToken), [id, session?.accessToken, version]);
-  const { data: pujas } = useAsync(cargarPujas, [id, session?.accessToken, version]);
+  const cargarPujas = useCallback(
+    () => (isAuthenticated ? listarPujasDeSubasta(id, session?.accessToken) : Promise.resolve([])),
+    [id, isAuthenticated, session?.accessToken, version]
+  );
+  const { data: pujas } = useAsync(cargarPujas, [id, isAuthenticated, session?.accessToken, version]);
 
   async function handleCambiarEstado(nuevoEstado) {
     await cambiarEstadoSubasta(id, nuevoEstado, session?.accessToken);
     setVersion((v) => v + 1);
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <div className="alert alert-info">
+        <p>
+          Necesitas una cuenta para ver el detalle de esta subasta. <Link to="/login">Inicia sesión o regístrate</Link>
+          .
+        </p>
+      </div>
+    );
   }
 
   if (loading) return <p className="loading-state">Cargando subasta…</p>;

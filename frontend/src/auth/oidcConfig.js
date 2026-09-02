@@ -38,9 +38,9 @@ export const entraSettings = {
   extraQueryParams: { prompt: "select_account" },
 };
 
-// El nombre exacto del claim de rol dentro del token todavía no está confirmado (depende de cómo se
-// configuren los custom attributes en Cognito y los app roles en Entra ID). Se centraliza acá para
-// ajustarlo en un solo lugar una vez que se sepa el nombre real.
+// Confirmado contra los proveedores reales: Cognito no incluye ningún claim de rol (por eso
+// AuthContext.jsx pasa "POSTOR" como valor por defecto para esa sesión, sin depender de esta
+// función); Entra ID sí expone los app roles asignados en el claim `roles` del id_token.
 export function extraerRol(claims) {
   return claims?.["custom:rol"] || claims?.role || claims?.roles?.[0] || null;
 }

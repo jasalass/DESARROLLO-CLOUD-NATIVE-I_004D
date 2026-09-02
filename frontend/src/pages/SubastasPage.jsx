@@ -24,7 +24,7 @@ export function SubastasPage() {
       {!isAuthenticated && (
         <div className="alert alert-info">
           <p>
-            Necesitás una cuenta para ver las subastas y pujar. <Link to="/login">Iniciá sesión o registrate</Link>{" "}
+            Necesitas una cuenta para ver las subastas y pujar. <Link to="/login">Inicia sesión o regístrate</Link>{" "}
             — es gratis y toma un minuto.
           </p>
         </div>

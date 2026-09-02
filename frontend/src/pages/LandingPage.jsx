@@ -17,17 +17,17 @@ const CATEGORIAS = [
 const PASOS = [
   {
     numero: "01",
-    titulo: "Explorá",
-    texto: "Filtrá por categoría y revisá el precio base, el incremento mínimo y el estado de cada lote.",
+    titulo: "Explora",
+    texto: "Filtra por categoría y revisa el precio base, el incremento mínimo y el estado de cada lote.",
   },
   {
     numero: "02",
-    titulo: "Pujá",
-    texto: "Ofertá en vivo. El precio vigente se actualiza al instante para todos los que están mirando.",
+    titulo: "Puja",
+    texto: "Oferta en vivo. El precio vigente se actualiza al instante para todos los que están mirando.",
   },
   {
     numero: "03",
-    titulo: "Ganá",
+    titulo: "Gana",
     texto: "Si tu oferta es la más alta al cierre, el lote queda adjudicado a tu nombre.",
   },
 ];
@@ -157,7 +157,7 @@ export function LandingPage() {
 
         {!isAuthenticated && (
           <div className="landing-cta-card">
-            <p>Iniciá sesión para ver el precio vigente y el historial de cada lote en vivo.</p>
+            <p>Inicia sesión para ver el precio vigente y el historial de cada lote en vivo.</p>
             <Link to="/login">Iniciar sesión →</Link>
           </div>
         )}
