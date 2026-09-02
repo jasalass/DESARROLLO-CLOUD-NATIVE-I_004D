@@ -20,6 +20,9 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtAut
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationProvider;
 import org.springframework.security.oauth2.server.resource.authentication.JwtIssuerAuthenticationManagerResolver;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import java.util.HashMap;
 import java.util.List;
@@ -44,9 +47,13 @@ public class SecurityConfig {
     @Value("${app.security.issuer-uri-entra:}")
     private String issuerUriEntra;
 
+    @Value("${app.security.allowed-origin:*}")
+    private String allowedOrigin;
+
     @Bean
     SecurityFilterChain filterChain(HttpSecurity http, JsonErrorWriter errorWriter) throws Exception {
         http
+                .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .csrf(csrf -> csrf.disable())
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
@@ -67,6 +74,24 @@ public class SecurityConfig {
                                 errorWriter.write(response, 403, "PROHIBIDO", "No tienes permiso para esta operación."))
                 );
         return http.build();
+    }
+
+    /**
+     * Sin esto, Spring MVC rechaza él solo cualquier preflight con "Invalid CORS request" (403) antes de
+     * que la petición llegue a un controller — el permitAll de OPTIONS de arriba solo evita que Spring
+     * Security la bloquee, pero Spring MVC igual la corta más adelante si no hay una CorsConfiguration
+     * registrada. El origen del frontend real se recibe por variable de entorno porque cambia con cada
+     * laboratorio de AWS Academy nuevo.
+     */
+    @Bean
+    CorsConfigurationSource corsConfigurationSource() {
+        CorsConfiguration configuration = new CorsConfiguration();
+        configuration.setAllowedOriginPatterns(List.of(allowedOrigin));
+        configuration.setAllowedMethods(List.of("GET", "POST", "PATCH", "OPTIONS"));
+        configuration.setAllowedHeaders(List.of("Authorization", "Content-Type"));
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", configuration);
+        return source;
     }
 
     private AuthenticationManagerResolver<HttpServletRequest> issuerAuthenticationManagerResolver() {

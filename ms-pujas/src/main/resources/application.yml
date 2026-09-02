@@ -31,3 +31,4 @@ app:
   security:
     issuer-uri-cognito: ${JWT_ISSUER_URI_COGNITO:}
     issuer-uri-entra: ${JWT_ISSUER_URI_ENTRA:}
+    allowed-origin: ${ALLOWED_ORIGIN:*}
