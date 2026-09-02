@@ -132,6 +132,12 @@ public class SecurityConfig {
                 rol = lista.get(0);
             }
         }
+        if (rol == null && issuerUriCognito != null && issuerUriCognito.equals(jwt.getClaims().get("iss"))) {
+            // Cognito en este proyecto solo se usa para postores (sección 2.5/5.6 del plan) — el
+            // proveedor ya implica el rol, no hace falta un custom:rol explícito en el token. Mismo
+            // criterio que ya aplica el frontend en oidcConfig.js/AuthContext.jsx.
+            rol = "POSTOR";
+        }
         return rol == null ? null : rol.toString();
     }
 }
