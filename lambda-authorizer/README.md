@@ -41,10 +41,14 @@ de alguno de los dos proveedores?".
 ## Cómo desplegarla (consola, sin pipeline todavía)
 
 1. **Lambda → Create function** → Author from scratch. Nombre: `subastalive-jwt-authorizer`.
-   Runtime: **Node.js 20.x**. Rol de ejecución: usa el rol existente `LabRole` (igual que el resto
-   de los recursos del laboratorio).
-2. Pegá el contenido de `index.js` en el editor de código inline (**Code → Code source**) —
-   reemplazá el `index.mjs` de ejemplo. **Deploy**.
+   Runtime: el que ofrezca la consola por defecto (en la práctica, Node.js 24.x). Rol de ejecución:
+   usa el rol existente `LabRole` (igual que el resto de los recursos del laboratorio).
+2. Pegá el contenido de `index.mjs` en el editor de código inline (**Code → Code source**),
+   reemplazando el `index.mjs` de ejemplo que trae la consola — **el nombre del archivo importa**:
+   con el runtime moderno, la consola crea el handler como ES module (`.mjs`, sintaxis
+   `import`/`export`), así que el código de este archivo está escrito en ese formato a propósito
+   (no en CommonJS con `require`, que falla con "require is not defined in ES module scope" si el
+   archivo se llama `.mjs`). **Deploy**.
 3. **Configuration → Environment variables** → cargá las 4 variables de la tabla de arriba.
 4. **API Gateway → `subastalive-api` → Autorizadores → Crear**:
    - Tipo: **Lambda**.

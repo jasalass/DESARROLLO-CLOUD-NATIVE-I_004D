@@ -55,7 +55,13 @@ function sessionFromOidcUser(user, providerRoleHint) {
     sub: claims.sub,
     nombre: claims.name || claims.given_name || null,
     email: claims.email || null,
-    accessToken: user.access_token,
+    // Se manda el id_token, no el access_token, como Bearer hacia el backend. Ninguno de los dos
+    // proveedores emite un access_token utilizable acá: el de Cognito no lleva `aud` (lleva
+    // `client_id`), y el de Entra ID queda emitido para Microsoft Graph (nunca se configuró un
+    // scope de API propio), así que ni siquiera trae el claim `roles` — los app roles solo
+    // aparecen en tokens cuya audiencia es esta aplicación. El id_token de ambos sí trae la
+    // audiencia correcta y, en Entra ID, el rol.
+    accessToken: user.id_token,
   };
 }
 

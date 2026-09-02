@@ -13,8 +13,8 @@
 //   COGNITO_ISSUER, COGNITO_CLIENT_ID
 //   ENTRA_ISSUER, ENTRA_CLIENT_ID
 
-const https = require("https");
-const crypto = require("crypto");
+import https from "node:https";
+import crypto from "node:crypto";
 
 const ISSUERS = [
   {
@@ -72,7 +72,7 @@ function verificarFirma(headerB64, payloadB64, signatureB64, jwk) {
   return crypto.verify("RSA-SHA256", datosFirmados, publicKey, firma);
 }
 
-exports.handler = async (event) => {
+export const handler = async (event) => {
   try {
     const authHeader = event.headers?.authorization || event.headers?.Authorization || "";
     if (!authHeader.startsWith("Bearer ")) {
