@@ -2,7 +2,8 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "./auth/AuthContext";
 import { RequireAuth } from "./auth/RequireAuth";
 import { Navbar } from "./components/Navbar";
-import { HomePage } from "./pages/HomePage";
+import { LandingPage } from "./pages/LandingPage";
+import { SubastasPage } from "./pages/SubastasPage";
 import { SubastaDetailPage } from "./pages/SubastaDetailPage";
 import { LoginPage } from "./pages/LoginPage";
 import { CallbackPostorPage } from "./pages/CallbackPostorPage";
@@ -20,7 +21,8 @@ function App() {
         <Navbar />
         <main className="container">
           <Routes>
-            <Route path="/" element={<HomePage />} />
+            <Route path="/" element={<LandingPage />} />
+            <Route path="/subastas" element={<SubastasPage />} />
             <Route path="/subastas/:id" element={<SubastaDetailPage />} />
             <Route path="/login" element={<LoginPage />} />
             <Route path="/auth/callback/postor" element={<CallbackPostorPage />} />

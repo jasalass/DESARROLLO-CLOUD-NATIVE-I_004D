@@ -491,15 +491,24 @@ vistas según el rol que trae el token.
 La decisión se implementó exactamente como se diseñó, incluyendo:
 
 - Ambos con Authorization Code + PKCE real (verificado con `oidc-client-ts` en el frontend).
-- El API Gateway valida JWT con un autorizador nativo contra Cognito, funcionando en producción.
+- El API Gateway valida JWT de ambos proveedores mediante un autorizador Lambda multi-issuer,
+  funcionando en producción — probado de punta a punta con un martillero real creando un lote.
 
-> **Matiz real encontrado:** un autorizador JWT nativo de API Gateway valida contra **un solo issuer**. El
-> diseño original ya anticipaba que esto se resolvería "mediante autorizadores diferenciados por emisor o un
-> autorizador que valide contra ambos, sin alterar el diseño" — en la práctica, con Cognito ya en producción,
-> se usó el autorizador nativo de un solo issuer para postores; incorporar Entra ID al mismo Gateway
-> (segunda ruta o autorizador Lambda multi-issuer) queda pendiente para cuando el flujo de
-> martillero/administrador necesite llamar a los microservicios vía Gateway (hoy solo se probó localmente
-> contra los stubs).
+> **Matiz real encontrado, ya resuelto:** un autorizador JWT nativo de API Gateway valida contra **un solo
+> issuer**, y cada ruta admite un solo autorizador — como las rutas del contrato son compartidas entre
+> postor y martillero/administrador, no alcanzaba con un segundo autorizador nativo colgado en la misma
+> ruta. El diseño original ya anticipaba esto ("mediante autorizadores diferenciados por emisor o un
+> autorizador que valide contra ambos, sin alterar el diseño") y esa fue la solución real: un autorizador
+> Lambda (`lambda-authorizer/`) que, por dentro, decide contra cuál de los dos proveedores validar la firma
+> según el claim `iss` del token. Reemplazó al autorizador nativo de Cognito en la ruta `ANY /{proxy+}`.
+>
+> Dos matices adicionales que aparecieron recién al probar el flujo real desde el navegador (no con
+> curl/Postman): el frontend tenía que mandar el `id_token` como Bearer, no el `access_token` — ninguno de
+> los dos proveedores emite un access token utilizable acá (el de Cognito no lleva `aud`; el de Entra ID
+> queda emitido para Microsoft Graph si nunca se configuró un scope de API propio, y por lo tanto ni
+> siquiera trae el claim `roles`). Y como Cognito no emite ningún claim de rol explícito, los microservicios
+> tuvieron que asumir el mismo criterio que ya usaba el frontend: un token de Cognito sin rol implica
+> `POSTOR`, porque ese proveedor no se usa para nada más.
 
 > **Aclaración importante sobre terminología, surgida al revisar la rúbrica de la asignatura:** la pauta de
 > evaluación (plantilla genérica de Duoc, no específica de este proyecto) usa el término "BFF" para referirse
@@ -592,25 +601,25 @@ tecnología y la entrega es mediante enlaces a GitHub.
 
 | Requerimiento | Elemento que lo cubre | Estado |
 |---|---|---|
-| R1.1 | Tres microservicios separados por dominio | ✅ `ms-pujas` en Spring Boot; `ms-catalogo`/`ms-usuarios` en Node/Express (stubs) |
+| R1.1 | Tres microservicios separados por dominio | ✅ `ms-pujas` y `ms-catalogo` en Spring Boot; `ms-usuarios` en Node/Express (stub) |
 | R1.2 | Aplicación SPA con vistas funcionales | ✅ React + Vite, diseño propio, probada en local y desplegada en AWS |
-| R1.3 | Build reproducible y pruebas básicas | ✅ `ms-pujas` con tests Mockito (`PujaServiceTest`); build de Docker reproducible para los 4 componentes |
-| R1.4 | Entidades, repositorios y esquema por servicio en RDS | ✅ `ms-pujas` (JPA + Flyway). 🔶 `ms-catalogo`/`ms-usuarios` sin persistencia real todavía |
-| R1.5 | Filtro de validación de JWT por microservicio | ✅ `ms-pujas` (`SecurityConfig.java`, multi-issuer). ❌ `ms-usuarios` decodifica el JWT pero no verifica firma/issuer/expiración (ver sección 14) |
+| R1.3 | Build reproducible y pruebas básicas | ✅ `ms-pujas`/`ms-catalogo` con tests Mockito; build de Docker reproducible para los 4 componentes |
+| R1.4 | Entidades, repositorios y esquema por servicio en RDS | ✅ `ms-pujas` y `ms-catalogo` (JPA + Flyway). 🔶 `ms-usuarios` sin persistencia real todavía |
+| R1.5 | Filtro de validación de JWT por microservicio | ✅ `ms-pujas` y `ms-catalogo` (`SecurityConfig.java`, multi-issuer real, probado con Cognito y Entra ID). ❌ `ms-usuarios` decodifica el JWT pero no verifica firma/issuer/expiración (ver sección 14) |
 | R1.6 | Login OIDC y adjunción del token | ✅ Cognito y Entra ID, ambos probados de punta a punta, con logout real incluido |
 | R1.7 | `.gitignore` por tecnología | ✅ Configurado en los 4 componentes + `infra-terraform/` |
 | R1.8 | Repositorios en GitHub | ✅ Monorepo único, con ramas de feature |
 | R1.9 | Instancia de API Gateway desplegada | ✅ HTTP API real, en `us-east-1`, con auto-deploy |
 | R1.10 | Rutas del API Gateway hacia el backend vía ALB | ✅ Un solo `/{proxy+}` sirve a los 3 microservicios, porque el ALB compartido ya enruta por path (ver sección 5.1) |
-| R1.11 | Frontend consumiendo a través del API Gateway | 🔶 Probado con Postman/curl con tokens reales; el frontend desplegado todavía apunta a datos simulados (`VITE_USE_MOCKS=true`) — conectarlo al Gateway real es el siguiente paso |
-| R1.12 | Validación JWT multi-issuer en el API Gateway | ✅ Cognito probado en producción (401 sin token, 200 con token real). Entra ID pendiente de agregar al Gateway |
+| R1.11 | Frontend consumiendo a través del API Gateway | ✅ Probado desde el navegador de punta a punta, con los dos roles: postor emitiendo una puja, martillero publicando un lote y programando una subasta — todo con persistencia real en RDS |
+| R1.12 | Validación JWT multi-issuer en el API Gateway | ✅ Autorizador Lambda (`lambda-authorizer/`) validando Cognito y Entra ID en la misma ruta, probado en producción con tokens reales de ambos proveedores |
 | R1.13 | User pool de Cognito y tenant de Entra ID con usuarios | ✅ Ambos con usuarios de prueba por rol (ver sección 13) |
 | R1.14 | Flujo Authorization Code con PKCE | ✅ Confirmado en ambos proveedores, incluyendo el detalle de que PKCE exige un contexto seguro (HTTPS) — ver sección 14 |
 | R1.15 | Backend y frontend desplegados e integrados en la nube | ✅ Los 4 componentes corriendo en ECS/Fargate, con CI/CD real (GitHub Actions) para cada uno |
 
-**Resumen:** 12 de 15 requisitos completamente cumplidos, 3 con cumplimiento parcial (persistencia y
-validación JWT de los dos stubs, y la conexión del frontend al backend real) — ninguno de los pendientes
-requiere cambios de arquitectura, son continuaciones directas de lo ya construido.
+**Resumen:** 14 de 15 requisitos completamente cumplidos, 1 con cumplimiento parcial (persistencia y
+validación JWT de `ms-usuarios`, el único de los tres microservicios que sigue siendo un stub) — no requiere
+cambios de arquitectura, es una continuación directa de lo ya construido en `ms-pujas` y `ms-catalogo`.
 
 ## 7. Etapa 2 — Mensajería asíncrona con RabbitMQ
 
@@ -1037,3 +1046,12 @@ Resumen ejecutivo de los problemas reales de esta entrega (detalle completo en
 | Login funcionaba pero el "Salir" no pedía credenciales de nuevo | El logout solo limpiaba la sesión local, sin avisarle a Cognito/Entra ID que terminaran su sesión de SSO | `signoutRedirect()` real para Entra ID; endpoint `/logout` propietario de Cognito con `VITE_COGNITO_DOMAIN` |
 | `ms-usuarios` desplegado con IP pública | Error de configuración al crear el Service de ECS, detectado recién al hacer el ejercicio de captura con Terraform | Pendiente de corregir en la consola real (`assign_public_ip = false`); ya corregido en la plantilla de Terraform |
 | Rama de un compañero con historia de git desconectada | Clonó el proyecto como ZIP en vez de `git clone`, y corrió `git init` propio | Pendiente: debe re-clonar y rehacer su rama desde `main` |
+| `ms-catalogo` no arrancaba en `docker-compose` tras reemplazar el stub por la implementación real | El bloque de `docker-compose.yml` seguía sin `SPRING_PROFILES_ACTIVE`/`DB_*`, heredado de cuando era un stub Node sin base de datos | Se agregaron las mismas variables que ya tenía `ms-pujas`, y se agregó `depends_on` con `condition: service_healthy` sobre `postgres` |
+| `POST /lotes` daba `500` en vez de `409` con dos requests simultáneas sobre el mismo lote | `existsBy...` y el `insert` no son atómicos; el índice único de la base sí lo evita, pero la excepción de conflicto no estaba capturada | Se captura `DataIntegrityViolationException` y se relanza como `LoteYaEnSubastaException` (409) |
+| Preflight `OPTIONS` del navegador daba `401` pese a tener CORS configurado en el API Gateway | La ruta `ANY /{proxy+}` cubre también `OPTIONS`, así que el Gateway no lo maneja automáticamente y lo pasa por el autorizador JWT, que lo rechaza por no llevar `Authorization` | Ruta `OPTIONS /{proxy+}` nueva, sin autorizador, con la misma integración hacia el ALB |
+| El mismo preflight, ya sin bloquear el Gateway, seguía dando `403 Invalid CORS request` | Spring MVC rechaza un preflight él solo si la app no tiene una `CorsConfiguration` propia registrada — el sistema dependía enteramente de los headers que ponía el Gateway | Bean `CorsConfigurationSource` real, wireado con `.cors(...)` en `SecurityConfig` de `ms-catalogo` y `ms-pujas` |
+| Martillero autenticado con Entra ID recibía `401`/`500` al llamar a la API a través del Gateway | El autorizador JWT nativo de API Gateway solo admite un issuer por ruta; y el `sub` de Entra ID no es un UUID (es un identificador *pairwise*), a diferencia del de Cognito | Autorizador Lambda multi-issuer (`lambda-authorizer/`) que decide contra qué proveedor validar según el `iss`; `CurrentUser.resolve()` usa el claim `oid` (GUID estable) para tokens de Entra ID |
+| El autorizador Lambda daba `500` con cualquier token, incluso uno inválido | El archivo se creó como `index.mjs` (ES module) pero el código estaba en CommonJS (`require`/`exports`) — el runtime moderno de Lambda scaffoldea ESM por defecto | Código reescrito con `import`/`export` |
+| El autorizador Lambda rechazaba tokens reales y válidos de los dos proveedores | El frontend mandaba el `access_token`, no el `id_token`, como Bearer — el de Cognito no lleva `aud` (lleva `client_id`), y el de Entra ID queda emitido para Microsoft Graph si no se configuró un scope de API propio, sin el claim `roles` | `AuthContext.jsx` cambiado para mandar `user.id_token` en vez de `user.access_token` |
+| Un postor real no podía pujar (`403 Solo un postor puede emitir pujas`) aunque el login funcionaba | Cognito no emite ningún claim de rol; `extraerRol()` en el backend devolvía `null` y no otorgaba `ROLE_POSTOR` | `extraerRol()` asume `POSTOR` cuando no hay claim de rol y el emisor es Cognito — mismo criterio que ya usaba el frontend |
+| Pujar como postor fallaba con "No se pudo validar la subasta ... contra ms-catalogo" | `MS_CATALOGO_BASE_URL` de `ms-pujas` seguía en el placeholder `http://localhost:8082`, de cuando `ms-catalogo` todavía no existía desplegado | Nueva revisión de la Task Definition de `ms-pujas` con `MS_CATALOGO_BASE_URL` apuntando al ALB compartido |

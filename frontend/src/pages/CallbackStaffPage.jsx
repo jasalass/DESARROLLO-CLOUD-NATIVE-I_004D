@@ -17,7 +17,7 @@ export function CallbackStaffPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (estado === "listo") return <Navigate to="/" replace />;
+  if (estado === "listo") return <Navigate to="/subastas" replace />;
   if (estado === "error") return <p className="alert alert-error">No se pudo completar el inicio de sesión.</p>;
   return <p>Completando inicio de sesión…</p>;
 }

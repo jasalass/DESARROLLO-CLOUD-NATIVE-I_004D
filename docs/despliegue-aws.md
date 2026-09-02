@@ -679,11 +679,32 @@ Esto es Azure, no AWS — vía [portal.azure.com](https://portal.azure.com):
 - Abre **Postman → New Request → GET**, pega la Invoke URL, pestaña **Headers** → agrega
   `Authorization: Bearer <el id_token copiado>` → **Send**. Debe responder **200**.
 
-> **Un solo issuer por autorizador.** Un autorizador JWT nativo de API Gateway valida contra **un** issuer.
-> Para aceptar Cognito *y* Entra ID en la misma ruta (como pide el contrato), la salida real es un
-> autorizador Lambda que pruebe ambos issuers, o dos autorizadores en rutas separadas. Esta guía prueba el
-> mecanismo con uno solo — la decisión de cuál camino tomar queda documentada en
-> [`ms-catalogo/README.md`](../ms-catalogo/README.md), sección 5.6 del plan.
+> **Un solo issuer por autorizador — y un solo autorizador por ruta.** Un autorizador JWT nativo de API
+> Gateway valida contra **un** issuer, y cada ruta HTTP API admite **un solo autorizador** asociado (no una
+> lista). Como las rutas del contrato (`/subastas`, `/lotes`, etc.) son compartidas entre postor (Cognito) y
+> martillero/administrador (Entra ID), no alcanza con crear un segundo autorizador nativo y colgarlo en la
+> misma ruta — hay que reemplazar el autorizador de Cognito por un **autorizador Lambda** que, por dentro,
+> decida contra cuál de los dos proveedores validar según el claim `iss` del token. Ya está implementado en
+> [`../lambda-authorizer/`](../lambda-authorizer/README.md) — ver ese README para el código y los pasos
+> exactos de despliegue. La decisión de diseño completa está en la sección 5.6 del plan.
+
+> **El frontend manda el `id_token`, no el `access_token`, como Bearer hacia el backend** — y no es una
+> elección arbitraria, los `access_token` de los dos proveedores son inutilizables acá. El de Cognito no
+> lleva el claim `aud` (lleva `client_id` en su lugar, así que cualquier chequeo de audiencia lo rechaza). El
+> de Entra ID queda emitido para Microsoft Graph si la app nunca pidió un scope de API propio — y por lo
+> tanto **ni siquiera trae el claim `roles`** (los app roles solo aparecen en tokens cuya audiencia es tu
+> propia aplicación). El `id_token` de ambos proveedores sí trae la audiencia correcta y, en Entra ID, el
+> rol — ver `frontend/src/auth/AuthContext.jsx`, función `sessionFromOidcUser`.
+
+> **Cognito no manda ningún claim de rol — hay que asumirlo por el proveedor.** A diferencia de Entra ID
+> (que sí expone `roles` vía app roles), un token de Cognito no trae `custom:rol`/`role`/`roles` a menos que
+> configures un custom attribute a mano y lo pobles por usuario. Como en este proyecto Cognito **solo** se
+> usa para postores, la solución más simple es asumir el rol por el emisor: si `extraerRol()` no encuentra
+> ningún claim de rol y el `iss` del token es el de Cognito, el rol es `POSTOR`. Sin esto, cualquier endpoint
+> que exija rol (como `POST /pujas`) rechaza a un postor real con "Solo un postor puede emitir pujas",
+> aunque el login haya sido exitoso — el frontend ya asumía esto mismo del lado de la UI
+> (`AuthContext.jsx`, `sessionFromOidcUser(cognitoUser, "POSTOR")`); el backend (`SecurityConfig` de
+> `ms-pujas` y `ms-catalogo`) tenía que aplicar el mismo criterio.
 
 > **`ms-pujas` necesita salir del perfil `local` para validar JWT reales.** Si el Task Definition sigue con
 > `SPRING_PROFILES_ACTIVE=local` (como en el primer deploy, cuando Cognito todavía no existía), el
@@ -699,6 +720,32 @@ Esto es Azure, no AWS — vía [portal.azure.com](https://portal.azure.com):
 > puede dar 401 en un intento y 200 en el siguiente, según a cuál tarea caiga la petición. Antes de
 > sospechar del API Gateway o de la validación JWT, revisa **ECS → Services → Deployments** y confirma que
 > solo quede la revisión nueva corriendo (0 tareas de la revisión anterior) antes de repetir la prueba.
+
+### CORS: el preflight `OPTIONS` necesita su propia ruta, y la app también necesita saber de CORS
+
+Configurar el CORS de la API (Access-Control-Allow-Origin/Methods/Headers, en **CORS** dentro de tu API) no
+alcanza por sí solo. Esto pasa porque la única ruta que existe es `ANY /{proxy+}` — y "ANY" en HTTP API
+**incluye** el método OPTIONS. API Gateway solo responde el preflight automáticamente (sin autorizador, sin
+tocar el backend) cuando *ninguna* ruta tuya cubre OPTIONS explícitamente; como "ANY" técnicamente sí lo
+cubre, el preflight sigue el camino normal — pasa por el autorizador, que lo rechaza con 401 porque un
+preflight nunca lleva `Authorization`.
+
+La solución tiene dos partes:
+
+1. **En el Gateway:** crear una ruta explícita `OPTIONS /{proxy+}`, con la misma integración que `ANY
+   /{proxy+}` pero **sin autorizador** (Autorización → None). Con eso el preflight ya no cae en la ruta
+   protegida.
+2. **En cada microservicio** (`ms-catalogo`, `ms-pujas`): como HTTP API no tiene integración tipo "Mock", el
+   `OPTIONS` de todas formas se reenvía hasta el backend. Ahí hacen falta dos cosas en `SecurityConfig`:
+   - `.requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()` para que Spring Security no le exija JWT.
+   - Un bean `CorsConfigurationSource` real, wireado con `.cors(...)`. Sin esto, aunque Spring Security ya
+     no bloquee el OPTIONS, **Spring MVC lo rechaza igual** con `403 Invalid CORS request` al llegar al
+     `DispatcherServlet` — porque la app nunca tuvo una `CorsConfiguration` propia, dependía enteramente de
+     que el Gateway pusiera los headers. El origen permitido se lee de la variable `ALLOWED_ORIGIN`
+     (default `*`, ya que no se usan cookies).
+
+En local no se nota nada de esto porque `local-gateway` (nginx) corta el `OPTIONS` con un `return 204` antes
+de que llegue a la app — el problema es específico de pasar por API Gateway en AWS.
 
 ## 10. Frontend — mismo patrón, su propio ALB
 
@@ -932,6 +979,18 @@ de listener que choquen con las de los otros, o quedar en una red separada), ah�
 integración y una ruta por prefijo apuntando a ese ALB nuevo — pero mientras compartan `subastalive-alb`, no
 hace falta.
 
+### Actualizar `MS_CATALOGO_BASE_URL` / `MS_PUJAS_BASE_URL` cuando el stub se reemplaza por el real
+
+Mientras `ms-catalogo` era un stub sin desplegar, `ms-pujas` tenía `MS_CATALOGO_BASE_URL=http://localhost:8082`
+como placeholder (no había nada real contra qué apuntar todavía). Una vez que `ms-catalogo` quedó
+implementado y desplegado de verdad, hay que **crear una nueva revisión de la Task Definition de `ms-pujas`**
+y cambiar esa variable a `http://<DNS-de-subastalive-alb>` — el mismo ALB compartido, igual que
+`MS_PUJAS_BASE_URL` en `ms-catalogo`. Sin este cambio, `ms-pujas` sigue intentando llamarse a sí mismo en el
+puerto 8082 (dentro de su propio contenedor no hay nada escuchando ahí), y cualquier puja falla con un error
+del tipo "No se pudo validar la subasta ... contra ms-catalogo" — el síntoma aparece recién al pujar
+(`POST /pujas`), no al listar ni ver el detalle de una subasta, porque esas rutas no necesitan la llamada
+interna de vuelta hacia `ms-catalogo`.
+
 ## 13. Costos y limpieza
 
 AWS Academy Learner Lab tiene un tope de gasto y de tiempo por sesión. El **NAT Gateway es el recurso que más
@@ -984,8 +1043,9 @@ valores nuevos.
 - [x] `http://<DNS-del-ALB>/health` responde `ms-pujas up`
 - [x] Cambiado del perfil `local` a `JWT_ISSUER_URI_COGNITO` una vez que Cognito existió — valida JWT reales, no el token simplificado
 
-**`ms-catalogo` y `ms-usuarios` (stubs, mismo patrón de infraestructura):**
-- [x] Repos en ECR, Task Definitions con `SERVER_PORT` y `MS_PUJAS_BASE_URL` apuntando al ALB compartido
+**`ms-catalogo` (real, mismo patrón que `ms-pujas`) y `ms-usuarios` (todavía stub):**
+- [x] Repos en ECR, Task Definitions con `SERVER_PORT` y las variables `MS_PUJAS_BASE_URL`/`MS_CATALOGO_BASE_URL` apuntando al ALB compartido en **ambos** sentidos — no solo la del que se despliega, también la del que lo llama a él (`MS_CATALOGO_BASE_URL` de `ms-pujas` quedó en `localhost` mucho después de que `ms-catalogo` ya estaba real, y solo se notaba al pujar)
+- [x] `ms-catalogo` con `JWT_ISSUER_URI_COGNITO`, `JWT_ISSUER_URI_ENTRA`, `DB_*` y sin `SPRING_PROFILES_ACTIVE=local` — mismo patrón que `ms-pujas`
 - [x] Comparten `subastalive-ecs-sg` (3 reglas: 8083/8082/8081, todas desde `subastalive-alb-sg`) — no se creó un security group por servicio
 - [x] Comparten `subastalive-alb` — no un ALB por microservicio — con reglas de listener por path (`/subastas*`+`/lotes*` → `ms-catalogo`, `/usuarios*` → `ms-usuarios`, todo lo demás → `ms-pujas` por defecto)
 - [x] Enrutamiento por path probado con curl contra cada ruta real (no contra `/health`, que siempre cae en la regla por defecto)
@@ -993,6 +1053,8 @@ valores nuevos.
 **API Gateway:**
 - [x] La Invoke URL da 401 sin token (visto en DevTools/curl) y 200 con el `id_token` de Cognito
 - [x] El mismo `/{proxy+}` sirve a los 3 microservicios sin rutas ni integraciones adicionales, gracias al ALB compartido
+- [x] Ruta `OPTIONS /{proxy+}` sin autorizador (además de `ANY /{proxy+}`) — sin ella, el preflight del navegador muere en el autorizador antes de llegar al backend
+- [x] Autorizador nativo de Cognito reemplazado por el Lambda multi-issuer (`lambda-authorizer/`), que acepta Cognito **y** Entra ID en la misma ruta — probado con un token de martillero real creando un lote de punta a punta
 
 **Identidad — Cognito (postores):**
 - [x] Usuario de prueba creado; login **y logout** probados de punta a punta, en local y en AWS (el logout debe pedir credenciales de nuevo, no re-entrar solo)
@@ -1008,11 +1070,13 @@ valores nuevos.
 - [x] Security group del ALB del frontend con **2 reglas**: HTTP/80 y HTTPS/443 (fácil perder la de 80 sin querer al agregar la de 443 editando en vez de agregar)
 - [x] `nginx.conf` sirve `index.html` con `Cache-Control: no-cache` — sin esto, el navegador puede quedar con una versión vieja que referencia un bundle JS que ya no existe tras un redeploy
 - [x] `main.jsx` no bloquea el render de la app si el Service Worker de MSW falla al registrarse (pasa con el certificado autofirmado)
+- [x] `VITE_API_BASE_URL` apuntando al API Gateway real (no al placeholder `localhost:8080`) y `VITE_USE_MOCKS=false` — probado desde el navegador, no solo con curl
+- [x] Manda el `id_token` como Bearer hacia el backend, no el `access_token` (ver nota de la sección 9) — necesario para que Entra ID lleve el rol y para que Cognito pase el chequeo de audiencia
 
 **CI/CD:**
 - [x] Secrets y Variables cargados en GitHub para los 4 workflows (incluyendo `VITE_COGNITO_DOMAIN`, `VITE_ENTRA_AUTHORITY`, `VITE_ENTRA_CLIENT_ID`); cada push a su carpeta dispara el workflow correspondiente
 - [x] Sabes en qué orden apagar todo cuando termines (empezando por el NAT Gateway)
 
 **Pendiente, fuera del alcance de esta guía de infraestructura:**
-- [ ] `ms-catalogo` y `ms-usuarios` siguen siendo stubs sin persistencia real ni validación JWT — reemplazarlos no debería requerir tocar nada de lo de arriba
+- [ ] `ms-usuarios` sigue siendo un stub sin persistencia real ni validación JWT — reemplazarlo no debería requerir tocar nada de lo de arriba (mismo patrón que ya se siguió con `ms-catalogo`)
 - [ ] Rama `feature/ms-usuarios` de un compañero con una implementación real parcial, pendiente de rehacer con historia de git correcta antes de integrar

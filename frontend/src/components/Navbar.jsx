@@ -22,7 +22,7 @@ export function Navbar() {
       </Link>
 
       <div className="navbar-links">
-        <Link to="/">Subastas</Link>
+        <Link to="/subastas">Subastas</Link>
 
         {!isAuthenticated && <Link to="/login">Ingresar</Link>}
 

@@ -8,12 +8,12 @@ export function LoginPage() {
 
   function handlePostor() {
     loginPostor();
-    if (AUTH_MODE === "mock") navigate("/");
+    if (AUTH_MODE === "mock") navigate("/subastas");
   }
 
   function handleStaff(rolMock) {
     loginStaff(rolMock);
-    if (AUTH_MODE === "mock") navigate("/");
+    if (AUTH_MODE === "mock") navigate("/subastas");
   }
 
   return (
