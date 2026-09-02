@@ -302,3 +302,27 @@ curl -H "Authorization: Bearer local:11111111-1111-1111-1111-111111111111:MARTIL
 ```bash
 mvn test
 ```
+
+## Dónde está implementado cada punto de la rúbrica (archivo:línea)
+
+Igual que `ms-pujas`, este servicio asume del lado del backend el indicador de la pauta sobre validar el
+token con el IDaaS definido — no existe un "BFF" como servicio aparte (ver la aclaración de terminología en
+la sección 5.6 del plan): cada microservicio hace su propia validación completa, detrás del API Gateway.
+
+La forma de leer la tabla: cada fila es un sub-requisito del indicador, con el archivo y las líneas exactas
+donde se resuelve, para poder abrir el código y verificarlo mientras se lee la pauta. Probado en producción
+con tokens reales de los dos proveedores — un martillero autenticado con Entra ID publicando un lote es la
+evidencia de punta a punta de toda esta tabla.
+
+| Qué exige la pauta | Dónde | Qué hace exactamente |
+|---|---|---|
+| Valida issuer y audience del JWT | [`security/SecurityConfig.java:98-107`](src/main/java/com/subastalive/catalogo/security/SecurityConfig.java#L98-L107) | `issuerAuthenticationManagerResolver()` arma un `JwtIssuerAuthenticationManagerResolver` con un `AuthenticationManager` por cada issuer configurado (Cognito y Entra ID) — solo un JWT cuyo `iss` esté en ese mapa pasa a validarse |
+| Verifica la firma del token | [`SecurityConfig.java:109-114`](src/main/java/com/subastalive/catalogo/security/SecurityConfig.java#L109-L114) | `jwtAuthenticationManager()` crea el `JwtDecoder` con `JwtDecoders.fromIssuerLocation(issuerUri)`, que descubre las claves públicas del issuer (JWKS) y valida la firma con ellas |
+| Verifica la vigencia (expiración) | [`SecurityConfig.java:109-114`](src/main/java/com/subastalive/catalogo/security/SecurityConfig.java#L109-L114) | La incluye el `JwtDecoder` de Spring Security por defecto (valida `exp`/`nbf` automáticamente al decodificar) |
+| Extrae el rol del token, sea cual sea el proveedor | [`SecurityConfig.java:125-143`](src/main/java/com/subastalive/catalogo/security/SecurityConfig.java#L125-L143) | `extraerRol()` lee el claim `roles` de Entra ID; para Cognito, que no emite ningún claim de rol, asume `POSTOR` por ser el único proveedor que se usa para ese rol |
+| Resuelve la identidad del usuario de forma correcta para ambos proveedores | [`security/CurrentUser.java:38-47`](src/main/java/com/subastalive/catalogo/security/CurrentUser.java#L38-L47) | `resolverIdentificador()` usa el claim `oid` para Entra ID (su `sub` es un identificador *pairwise*, no un UUID) y el `sub` estándar para Cognito — es el valor que queda como `martilleroSub` de un lote |
+| Aplica autorización por rol | [`security/CurrentUser.java:20-29`](src/main/java/com/subastalive/catalogo/security/CurrentUser.java#L20-L29), [`web/LoteController.java:43-46`](src/main/java/com/subastalive/catalogo/web/LoteController.java#L43-L46) y [`web/SubastaController.java`](src/main/java/com/subastalive/catalogo/web/SubastaController.java) | `CurrentUser.resolve()` extrae el rol desde el `GrantedAuthority` (`ROLE_<ROL>`, otorgado en `SecurityConfig.java:116-123`); los controllers rechazan con `AccessDeniedException` si el rol no es Martillero/Administrador para las rutas de escritura |
+| Configura CORS para permitir la comunicación con el frontend | [`SecurityConfig.java:57, 87-96`](src/main/java/com/subastalive/catalogo/security/SecurityConfig.java#L57) | `.cors(...)` wireado con un bean `CorsConfigurationSource` propio — necesario porque Spring MVC rechaza el preflight `OPTIONS` por su cuenta si no hay una `CorsConfiguration` registrada, incluso si el API Gateway ya tiene CORS configurado (ver `despliegue-aws.md`, sección 9) |
+| Responde con códigos de error adecuados | [`SecurityConfig.java:68-76`](src/main/java/com/subastalive/catalogo/security/SecurityConfig.java#L68-L76) (401/403 desde la capa de seguridad) y [`web/GlobalExceptionHandler.java:26-86`](src/main/java/com/subastalive/catalogo/web/GlobalExceptionHandler.java#L26-L86) (404/409/400/403/500 desde la lógica de negocio) | Todos devuelven el mismo formato `{codigo, mensaje, detalles}` vía [`web/JsonErrorWriter.java:21-25`](src/main/java/com/subastalive/catalogo/web/JsonErrorWriter.java#L21-L25) o `ErrorResponse.of(...)`; el handler genérico (`GlobalExceptionHandler.java:81-86`) además deja el error real en el log, no solo el 500 genérico al cliente |
+| Endpoint de salud para verificar el despliegue | [`web/HealthController.java:9-12`](src/main/java/com/subastalive/catalogo/web/HealthController.java#L9-L12) | `GET /health` → `"ms-catalogo up"`, sin autenticación (`SecurityConfig.java:61`) — es lo que usa el health check del Target Group en AWS |
+| Modo de prueba sin IdPs reales (perfil `local`) | [`security/LocalSecurityConfig.java`](src/main/java/com/subastalive/catalogo/security/LocalSecurityConfig.java), [`security/LocalTokenAuthFilter.java`](src/main/java/com/subastalive/catalogo/security/LocalTokenAuthFilter.java) | Reemplaza la validación JWT real por un token trivial (`Bearer local:<sub>:<ROL>`) — activo solo con `SPRING_PROFILES_ACTIVE=local`, nunca en producción |

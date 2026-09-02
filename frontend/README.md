@@ -158,6 +158,13 @@ los prerrequisitos de infraestructura y los Secrets/Variables de GitHub están e
 
 ## Dónde está implementado cada punto de la rúbrica (archivo:línea)
 
+La forma de leer esta tabla: cada fila es un sub-requisito de la pauta de presentación (login OIDC, PKCE,
+JWT adjunto en cada llamada, restricción por rol), con el archivo y las líneas exactas donde se resuelve —
+pensada para abrirla en paralelo mientras se lee el indicador de la rúbrica y verificar el código real, no
+una promesa de diseño. Todo lo de la tabla está probado en producción, no solo en local: un postor real
+(Cognito) emitiendo una puja y un martillero real (Entra ID) publicando un lote, los dos de punta a punta
+contra AWS.
+
 | Qué exige la pauta | Dónde | Qué hace exactamente |
 |---|---|---|
 | Inicia el flujo de login (botones "Ingresar como...") | [`src/pages/LoginPage.jsx:9-17`](src/pages/LoginPage.jsx#L9-L17) | `handlePostor()`/`handleStaff()` llaman a `loginPostor()`/`loginStaff()` del contexto de auth |

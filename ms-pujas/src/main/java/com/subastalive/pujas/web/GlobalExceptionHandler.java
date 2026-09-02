@@ -5,6 +5,8 @@ import com.subastalive.pujas.error.MontoInsuficienteException;
 import com.subastalive.pujas.error.SubastaNoAbiertaException;
 import com.subastalive.pujas.error.SubastaNoEncontradaException;
 import com.subastalive.pujas.web.dto.ErrorResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
@@ -16,6 +18,8 @@ import java.util.Map;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
     @ExceptionHandler(SubastaNoAbiertaException.class)
     public ResponseEntity<ErrorResponse> handleSubastaNoAbierta(SubastaNoAbiertaException ex) {
@@ -60,6 +64,7 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleGenerico(Exception ex) {
+        log.error("Error inesperado procesando la solicitud", ex);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(ErrorResponse.of("ERROR_INTERNO", "Ocurrió un error inesperado."));
     }

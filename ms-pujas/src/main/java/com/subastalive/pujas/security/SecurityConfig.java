@@ -32,9 +32,10 @@ import java.util.Map;
  * Seguridad real: valida el JWT contra los dos proveedores de identidad (Cognito y Entra ID) — RF-29, RF-33.
  * No se activa con el perfil "local" (ver LocalSecurityConfig), que la reemplaza para pruebas sin AWS/Azure.
  *
- * El nombre exacto del claim de rol dentro del token todavía no está confirmado (custom attribute en
- * Cognito vs. app role en Entra ID) — se resuelve en extraerRol(), es el único lugar que hay que ajustar
- * una vez que se sepa el nombre real.
+ * Confirmado contra los proveedores reales, en extraerRol(): Entra ID expone el rol en el claim `roles`
+ * (app role asignado); Cognito no incluye ningún claim de rol, así que se asume POSTOR cuando el issuer es
+ * el de Cognito — ese proveedor no se usa para otro rol en este proyecto (mismo criterio en
+ * ms-catalogo/security/SecurityConfig.java y en el frontend, oidcConfig.js).
  */
 @Configuration
 @EnableWebSecurity
