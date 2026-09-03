@@ -1,8 +1,8 @@
 {
-  "name": "ms-usuarios-stub",
+  "name": "ms-usuarios",
   "private": true,
   "version": "0.1.0",
-  "description": "Stub liviano de ms-usuarios para pruebas locales — no es la implementación real, ver README.md.",
+  "description": "Perfil de usuario y historial de pujas — ver README.md.",
   "type": "module",
   "scripts": {
     "start": "node src/server.js"
@@ -12,6 +12,7 @@
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^4.22.2",
+    "jsonwebtoken": "^9.0.3",
     "pg": "^8.23.0"
   }
 }

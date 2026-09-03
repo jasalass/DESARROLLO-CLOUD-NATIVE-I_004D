@@ -3,8 +3,8 @@
 # Qué es real y qué es un stub, para que quede claro qué estás probando:
 #   - ms-pujas    -> implementación REAL (Spring Boot + Postgres + Flyway).
 #   - ms-catalogo -> implementación REAL (Spring Boot + Postgres + Flyway), mismo patrón que ms-pujas.
-#   - ms-usuarios -> STUB liviano (Node/Express, datos en memoria) — quien lo construya de verdad
-#                    reemplaza esa carpeta entera, el contrato HTTP no cambia.
+#   - ms-usuarios -> implementación REAL (Node/Express + Postgres), mismo esquema compartido que los
+#                    otros dos servicios (sin Flyway: aplica su V1__init.sql a mano al arrancar).
 #   - frontend    -> real, tal como se despliega, en modo de autenticación "mock" (sin Cognito/Entra ID
 #                    reales) para poder loguearse sin nada externo.
 #
@@ -102,8 +102,17 @@ services:
       context: ./ms-usuarios
     container_name: subastalive-ms-usuarios
     depends_on:
-      - ms-pujas
+      postgres:
+        condition: service_healthy
+      ms-pujas:
+        condition: service_started
     environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: subastalive
+      DB_USERNAME: subastalive
+      DB_PASSWORD: subastalive
+      DB_POOL_MAX_SIZE: 5
       MS_PUJAS_BASE_URL: http://ms-pujas:8083
       SERVER_PORT: 8081
     ports:

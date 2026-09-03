@@ -1,12 +1,10 @@
 # ms-usuarios
 
-> Este microservicio todavía no tiene su implementación real. Esta carpeta trae por ahora un **stub liviano
-> en Node/Express** (`src/server.js`) que respeta el contrato JSON exacto de abajo pero sin lógica de negocio
-> real (sin Flyway, sin validación JWT, sin persistencia más allá de datos en memoria) — sirve únicamente
-> para poder levantar y probar el sistema completo (frontend + gateway + los tres servicios) mientras se
-> construye la versión definitiva. Este documento es el **contrato** que debe cumplir esa versión definitiva,
-> para que quien la construya (en cualquier stack — Spring Boot, Node, .NET, lo que sea) pueda hacerlo sin
-> coordinar cada detalle en vivo con el resto del equipo. Ver el plan completo en
+> Implementación real en **Node/Express + PostgreSQL** (`src/server.js`), con el mismo esquema compartido
+> que usan `ms-pujas` y `ms-catalogo`. No usa Flyway (no existe un equivalente estándar en Node): en su lugar,
+> `src/db.js` aplica `src/db/V1__init.sql` (copia del `V1__init.sql` real en
+> [`../db/schema_usuarios`](../db/schema_usuarios)) a mano en cada arranque — es seguro de repetir porque usa
+> `CREATE SCHEMA/TABLE IF NOT EXISTS`. Ver el plan completo en
 > [`../docs/SubastaLive_Plan_de_Proyecto_v4.pdf`](../docs/SubastaLive_Plan_de_Proyecto_v4.pdf) (secciones 5.6, 6.2, 6.3).
 >
 > Convenciones generales (formato de error, tipos de dato, roles, header de auth) están centralizadas en el
@@ -29,12 +27,20 @@ Cubre las historias:
 
 ## Autenticación y autorización
 
-- Debe validar el JWT en cada request (filtro / interceptor / middleware según el stack elegido), aceptando
+- El middleware [`src/middlewares/auth.js`](src/middlewares/auth.js) valida el JWT en cada request, aceptando
   tokens emitidos por **dos issuers**: el user pool de Amazon Cognito (postores) y el tenant de Microsoft
-  Entra ID (martilleros/administradores). Rechazar con 401 si el token no es válido o no viene de alguno de
-  los dos issuers configurados (RF-29, RF-33).
-- El rol autorizado se lee del claim de rol dentro del token, no de la ruta ni del issuer (RF-30, RF-34).
-- El identificador de usuario a usar como clave de negocio es el claim `sub` del token.
+  Entra ID (martilleros/administradores). Verifica firma (RS256 contra el JWKS de cada proveedor, con caché
+  en memoria), `iss`, `exp`/`nbf` y `aud` — no solo decodifica el token, lo verifica de verdad
+  ([`src/security/jwt.js`](src/security/jwt.js)). Rechaza con 401 si el token no es válido o no viene de
+  alguno de los dos issuers configurados (RF-29, RF-33).
+- El rol se lee del claim `roles` de Entra ID; Cognito no emite ningún claim de rol para los postores, así
+  que se asume `POSTOR` cuando el issuer es el de Cognito — mismo criterio que `ms-pujas`/`ms-catalogo`
+  (RF-30, RF-34).
+- El identificador de usuario a usar como clave de negocio es el claim `sub` del token, salvo para Entra ID:
+  su `sub` es un identificador *pairwise* (no un UUID), así que se usa el claim `oid` en su lugar — mismo
+  criterio que `CurrentUser.java` en los otros dos servicios.
+- Para pruebas locales sin IdPs reales (`docker-compose.yml`), acepta además el formato simplificado
+  `Bearer local:<sub>:<ROL>`, nunca usado en producción.
 
 ## Modelo de datos (JSON)
 
@@ -137,11 +143,12 @@ servicios en esta etapa es síncrona vía HTTP.**
 
 | Variable | Descripción |
 |---|---|
-| `DB_URL` / `DB_HOST` / `DB_PORT` / `DB_NAME` | Conexión a la instancia RDS PostgreSQL |
+| `DB_HOST` / `DB_PORT` / `DB_NAME` | Conexión a la instancia RDS PostgreSQL (mismo `subastalive` que usan `ms-pujas`/`ms-catalogo`, cada uno en su propio esquema) |
 | `DB_USERNAME`, `DB_PASSWORD` | Credenciales de conexión |
 | `DB_POOL_MAX_SIZE` | Límite del pool de conexiones por contenedor (RNF-05) |
 | `JWT_ISSUER_URI_COGNITO` | Issuer URI del user pool de Cognito |
 | `JWT_ISSUER_URI_ENTRA` | Issuer URI del tenant de Entra ID |
+| `ALLOWED_ORIGIN` | Origen permitido para CORS (URL del frontend); `*` por defecto |
 | `MS_PUJAS_BASE_URL` | URL base para llamar a `ms-pujas` (ej. `http://ms-pujas:8083` en Docker Compose) |
 | `SERVER_PORT` | Puerto HTTP del servicio (sugerido: `8081`) |
 
@@ -154,17 +161,47 @@ servicios en esta etapa es síncrona vía HTTP.**
   `resultado` una vez que exista `ms-adjudicacion`. Si se anticipa esto, conviene separar la lógica de "armar
   el historial" de "cómo se obtienen los datos", para no reescribir todo después.
 
-## Checklist para quien lo implemente
+## Cómo levantarlo
 
-- [ ] Definir el stack (Spring Boot es lo planeado originalmente, pero es libre).
-- [ ] Modelar la entidad `Usuario` según el JSON de arriba.
-- [ ] Migraciones de `schema_usuarios` con Flyway (copiar el `V1__init.sql` de `../db/schema_usuarios` a
-      `src/main/resources/db/migration/` — ver `../db/README.md`, sección "Migraciones automáticas").
-- [ ] Validación JWT multi-issuer.
-- [ ] Implementar el auto-provisioning en `GET /usuarios/me`.
-- [ ] Cliente HTTP hacia `ms-pujas` para `GET /usuarios/{sub}/historial`.
-- [ ] Exponer `/health` para verificación de despliegue.
-- [ ] Dockerfile para poder correrlo en el `docker-compose.yml` de la raíz del repo.
-- [ ] Repositorio ECR + cluster/service de ECS creados (ver README principal, sección CI/CD) — el pipeline
-      [`../.github/workflows/deploy-ms-usuarios.yml`](../.github/workflows/deploy-ms-usuarios.yml) ya existe
-      y se activa solo al hacer push a esta carpeta.
+**Con Docker Compose (recomendado, junto al resto del sistema):**
+```bash
+docker compose up -d --build
+```
+Esto reconstruye la imagen de `ms-usuarios` y la levanta en el puerto `8081`, conectada a Postgres con el
+esquema `schema_usuarios` creado automáticamente al arrancar.
+
+**Suelto, con Node (requiere Postgres corriendo en `localhost:5432`, ver `../db/README.md`):**
+```bash
+cd ms-usuarios
+npm install
+npm start
+```
+
+**Probar un endpoint** (con el token simplificado, formato `local:<sub>:<ROL>` — ver
+`src/middlewares/auth.js`):
+```bash
+curl -H "Authorization: Bearer local:11111111-1111-1111-1111-111111111111:POSTOR" \
+     http://localhost:8081/usuarios/me
+```
+
+## Dónde está implementado cada punto de la rúbrica (archivo:línea)
+
+Igual que `ms-pujas` y `ms-catalogo`, este servicio hace su propia validación JWT completa detrás del API
+Gateway, sin un BFF intermedio (ver la aclaración de terminología en la sección 5.6 del plan). La diferencia
+es el stack: acá no hay Spring Security, así que la verificación de firma/issuer/expiración y la extracción
+de rol/identidad están escritas a mano, replicando exactamente el mismo criterio que usan los otros dos
+servicios en Java.
+
+| Qué exige la pauta | Dónde | Qué hace exactamente |
+|---|---|---|
+| Valida el issuer del JWT | [`src/security/jwt.js:47-60`](src/security/jwt.js#L47-L60) | `verificarJwt()` decodifica el payload sin verificar para leer `iss`, busca el proveedor configurado que coincida (Cognito o Entra ID) y rechaza si no hay coincidencia; luego `jwt.verify()` vuelve a exigir ese mismo `issuer` al validar la firma |
+| Verifica la firma del token | [`src/security/jwt.js:34-60`](src/security/jwt.js#L34-L60) | `obtenerClave()` descarga el JWKS del proveedor (con caché de 10 minutos) y arma la clave pública con `crypto.createPublicKey()`; `jwt.verify()` valida la firma RS256 contra esa clave |
+| Verifica la vigencia (expiración) | [`src/security/jwt.js:59`](src/security/jwt.js#L59) | `jwt.verify()` (paquete `jsonwebtoken`) valida `exp`/`nbf` por defecto al verificar |
+| Extrae el rol del token, sea cual sea el proveedor | [`src/security/jwt.js:63-67`](src/security/jwt.js#L63-L67) | `extraerRol()` lee el claim `roles` de Entra ID; para Cognito, que no emite ningún claim de rol, asume `POSTOR` por ser el único proveedor que se usa para ese rol |
+| Resuelve la identidad del usuario de forma correcta para ambos proveedores | [`src/security/jwt.js:71-73`](src/security/jwt.js#L71-L73) | `extraerSub()` usa el claim `oid` para Entra ID (su `sub` es un identificador *pairwise*, no un UUID) y el `sub` estándar para Cognito |
+| Aplica autorización por rol | [`src/server.js:56-63`](src/server.js#L56-L63) | `GET /usuarios/:sub/historial` rechaza con 403 salvo que el solicitante pida su propio historial o sea Administrador |
+| Configura CORS para permitir la comunicación con el frontend | [`src/server.js:16`](src/server.js#L16) | `cors({ origin: ALLOWED_ORIGIN })`, configurable por variable de entorno |
+| Responde con códigos de error adecuados | [`src/middlewares/auth.js:12,19,35`](src/middlewares/auth.js#L35) (401) y [`src/server.js:45-48,58-62,82-88`](src/server.js#L82-L88) (403/500/502) | El error real siempre queda en el log (`console.error`) antes de responder, en vez de esconderse detrás de una respuesta 200 falsa como hacía la versión anterior |
+| Endpoint de salud para verificar el despliegue | [`src/server.js:19-22`](src/server.js#L19-L22) | `GET /health`, sin autenticación |
+| Persistencia con esquema propio | [`src/db.js`](src/db.js), [`src/db/V1__init.sql`](src/db/V1__init.sql) | Sin Flyway (no hay equivalente estándar en Node): `migrar()` aplica el mismo `V1__init.sql` que usan los otros servicios contra `schema_usuarios` en cada arranque, de forma idempotente |
+| Modo de prueba sin IdPs reales | [`src/middlewares/auth.js:6-13`](src/middlewares/auth.js#L6-L13) | Acepta `Bearer local:<sub>:<ROL>` sin verificación JWT — solo pensado para `docker-compose.yml`, nunca en producción |
