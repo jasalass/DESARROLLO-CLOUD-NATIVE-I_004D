@@ -15,8 +15,12 @@ directo — ver la explicación de esa alternativa en el propio hilo de esta con
   de AWS Academy. Se sigue haciendo a mano por el portal de Azure (sección 8 de la guía).
 - **GitHub Actions Secrets/Variables** — hay que cargarlos a mano después del `apply`, con los valores
   de los `output` (ver más abajo).
-- **Las implementaciones reales de `ms-catalogo`/`ms-usuarios`** — esto crea la infraestructura que
-  los recibe, no su código. Los stubs actuales sirven tal cual.
+- **El build y push de las imágenes de contenedor** — esto crea la infraestructura y las Task
+  Definitions apuntando a `:latest` en ECR, pero no construye ni sube ninguna imagen. Sin al menos un
+  push manual o disparar los workflows de GitHub Actions después del `apply`, las tareas de ECS van a
+  fallar al intentar descargar una imagen que todavía no existe (`ms-pujas`, `ms-catalogo` y
+  `ms-usuarios` están implementados de verdad — ver sus README — pero Terraform no sabe nada de eso,
+  solo referencia el tag).
 
 ## Uso
 

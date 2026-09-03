@@ -1,6 +1,6 @@
 # Entorno local de SubastaLive — Etapa 1, todo dockerizado para probar de punta a punta.
 #
-# Qué es real y qué es un stub, para que quede claro qué estás probando:
+# Los tres microservicios son implementaciones reales (ninguno es ya un stub):
 #   - ms-pujas    -> implementación REAL (Spring Boot + Postgres + Flyway).
 #   - ms-catalogo -> implementación REAL (Spring Boot + Postgres + Flyway), mismo patrón que ms-pujas.
 #   - ms-usuarios -> implementación REAL (Node/Express + Postgres), mismo esquema compartido que los
@@ -17,7 +17,7 @@
 #   docker compose down            # detiene todo, conserva los datos de Postgres
 #   docker compose down -v         # detiene todo y borra el volumen de la base (reinicia desde cero)
 #
-# Una vez arriba: http://localhost:5173 (frontend, ya hablando con los backends reales/stub de verdad).
+# Una vez arriba: http://localhost:5173 (frontend, ya hablando con los tres backends reales).
 
 services:
   postgres:

@@ -20,6 +20,17 @@ variable "db_master_password" {
   sensitive   = true
 }
 
+variable "entra_tenant_id" {
+  description = <<-EOT
+    Directory (tenant) ID del App registration de Microsoft Entra ID (martillero/administrador).
+    Entra ID vive en Azure, fuera del alcance de este Terraform (ver cognito.tf) — este valor sale de
+    crear el App registration a mano, según docs/despliegue-aws.md, sección 8. Se usa para armar
+    JWT_ISSUER_URI_ENTRA (https://login.microsoftonline.com/<tenant_id>/v2.0) en los tres
+    microservicios.
+  EOT
+  type        = string
+}
+
 variable "cognito_domain_prefix" {
   description = <<-EOT
     Prefijo del dominio del Hosted UI de Cognito (https://<prefijo>.auth.<region>.amazoncognito.com).

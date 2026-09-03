@@ -20,8 +20,8 @@ construida y probada a mano, con cada gotcha real ya resuelto en el código.
 SubastaLive/
 ├── .github/workflows/   Pipelines CI/CD (build → ECR → deploy ECS), uno por microservicio
 ├── frontend/        SPA — login dual Cognito / Entra ID (implementado, desplegado en ECS)
-├── ms-usuarios/     Microservicio — perfil de dominio del usuario           (stub liviano Node/Express)
-├── ms-catalogo/     Microservicio — lotes, subastas y estados               (implementado en Spring Boot)
+├── ms-usuarios/     Microservicio — perfil de dominio del usuario           (implementado en Node/Express, desplegado en ECS)
+├── ms-catalogo/     Microservicio — lotes, subastas y estados               (implementado en Spring Boot, desplegado en ECS)
 ├── ms-pujas/        Microservicio — recepción y validación de pujas        (implementado en Spring Boot, desplegado en ECS)
 ├── local-gateway/   Nginx que unifica los microservicios bajo un solo origen para pruebas locales
 ├── db/              Scripts SQL por esquema para la instancia RDS (PostgreSQL)
@@ -33,30 +33,30 @@ Esta es la estructura de la **Etapa 1** (arquitectura base, identidad federada y
 etapas 2 y 3 agregarán mensajería (RabbitMQ) y streaming (Kafka) sin modificar lo ya construido (ver sección
 4 del plan).
 
-## Estado actual: dos reales, uno en contrato
+## Estado actual: los tres microservicios implementados y desplegados
 
-`ms-pujas` y `ms-catalogo` ya están implementados de verdad (Spring Boot + JPA + Flyway + seguridad dual
-local/JWT), probados en Docker Compose local; `ms-pujas` además ya está desplegado en ECS/Fargate en AWS.
-`ms-usuarios` todavía es un **stub liviano en Node/Express** (mismo contrato JSON exacto, sin lógica de
-negocio real) — sirve para poder levantar y probar el sistema completo de punta a punta (frontend + gateway +
-los tres servicios) mientras se termina su implementación definitiva **en el stack que se prefiera** (Spring
-Boot, Node, .NET, lo que sea), reemplazando el stub sin tener que tocar el frontend, el gateway local ni la
-infraestructura de AWS.
+`ms-pujas` y `ms-catalogo` (Spring Boot + JPA + Flyway) y `ms-usuarios` (Node/Express + PostgreSQL, sin
+Flyway) están implementados de verdad, con persistencia real en RDS y validación JWT multi-issuer (Cognito +
+Entra ID) en los tres — probados en Docker Compose local y desplegados en ECS/Fargate en AWS. Ninguno de los
+tres es ya un stub; `ms-usuarios` fue el último en dejar de serlo (ver
+[`docs/despliegue-aws.md`](docs/despliegue-aws.md), sección 12, para los incidentes reales de ese último
+reemplazo).
 
 Cada microservicio tiene un `README.md` que funciona como contrato: qué responsabilidad tiene, qué esquema de
-base de datos le pertenece, qué endpoints debe exponer (con rutas, roles, y el JSON exacto de cada
-request/response), y qué llamadas debe hacer a los otros microservicios (con el JSON exacto de esas llamadas
-también) — el contrato entre servicios ya queda escrito y las decisiones de diseño ambiguas ya están
-resueltas.
+base de datos le pertenece, qué endpoints expone (con rutas, roles, y el JSON exacto de cada
+request/response), y qué llamadas hace a los otros microservicios (con el JSON exacto de esas llamadas
+también) — el mismo formato de contrato sigue siendo la referencia para los microservicios nuevos que se
+agreguen en las Etapas 2 y 3 (`ms-notificaciones`, `ms-documentos`, `ms-adjudicacion`, etc., ver sección 5.5
+del plan).
 
-Quien reemplace un stub por la implementación real debe:
+Quien construya uno de esos microservicios nuevos siguiendo su contrato debe:
 1. Leer su `README.md` completo antes de empezar.
 2. Elegir stack y anotarlo en el README del servicio.
-3. Si encuentra un punto no cubierto aquí, resolverlo y **documentar la decisión tomada en el mismo README**,
+3. Si encuentra un punto no cubierto ahí, resolverlo y **documentar la decisión tomada en el mismo README**,
    para que quien construya los servicios vecinos sepa a qué atenerse.
 4. Agregar sus tablas al esquema correspondiente en `db/` (ver [`db/README.md`](db/README.md)).
-5. Reemplazar el `Dockerfile` del stub por el de su implementación real en `docker-compose.yml` — el bloque
-   del servicio ya existe y ya está en la misma red que la base de datos, no hace falta descomentar nada.
+5. Agregar su servicio a `docker-compose.yml` una vez que tenga `Dockerfile` — mismo patrón que ya siguen los
+   tres microservicios actuales (red compartida con la base de datos, variables `DB_*`/`JWT_ISSUER_URI_*`).
 
 El frontend ya está implementado en `frontend/`; no tiene contrato aparte porque consume los mismos endpoints
 documentados abajo, a través del API Gateway.
@@ -166,7 +166,7 @@ Esto levanta el entorno completo:
 - **Adminer** en [http://localhost:8080](http://localhost:8080) para explorar la base sin instalar nada
   (servidor: `postgres`, usuario/clave/base: `subastalive`).
 - **`ms-pujas`** y **`ms-catalogo`** (Spring Boot real) en los puertos `8083` y `8082`.
-- **`ms-usuarios`** (stub Node/Express con el mismo contrato) en `8081`.
+- **`ms-usuarios`** (Node/Express real, mismo esquema compartido) en `8081`.
 - **`local-gateway`** (Nginx) en `localhost:8090` — unifica los tres microservicios bajo un solo origen con
   CORS habilitado, haciendo de API Gateway local (sin validar JWT — eso lo hace cada microservicio, y el API
   Gateway real en AWS).
@@ -207,12 +207,9 @@ la pestaña **Actions** de GitHub):
 3. Ejecuta `aws ecs update-service --force-new-deployment` sobre el servicio de **ECS** correspondiente, que
    vuelve a desplegar la tarea tirando la imagen `latest` recién publicada.
 
-**Importante:** cada workflow asume que ya existe un `Dockerfile` en su carpeta. `frontend/`, `ms-pujas/` y
-`ms-catalogo/` ya lo tienen, con su implementación real en Spring Boot — `ms-pujas` ya probada tanto en Docker
-Compose local como desplegada en ECS/Fargate; `ms-catalogo` probada en Docker Compose local, pendiente de
-desplegar. `ms-usuarios/` trae por ahora un `Dockerfile` de un stub liviano en Node/Express (mismo contrato
-JSON, sin lógica real) — se reemplaza por la implementación definitiva sin tocar el workflow ni la
-infraestructura.
+**Importante:** cada workflow asume que ya existe un `Dockerfile` en su carpeta. Las cuatro partes lo tienen,
+con su implementación real: `ms-pujas` y `ms-catalogo` en Spring Boot, `ms-usuarios` en Node/Express — los
+tres probados en Docker Compose local y desplegados en ECS/Fargate.
 
 ### Prerrequisitos de infraestructura (manuales, una sola vez, por cada una de las 4 partes)
 

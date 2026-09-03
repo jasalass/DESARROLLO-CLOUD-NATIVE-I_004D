@@ -5,3 +5,7 @@ db_master_password    = "elige-una-password-segura"
 # (corre `terraform apply` una vez, si falla por "already exists" copia el account_id del error y
 # agrégalo aquí).
 cognito_domain_prefix = "subastalive-tu-account-id"
+# Directory (tenant) ID del App registration de Entra ID (Azure, se crea a mano — ver despliegue-aws.md
+# sección 8). Sin este valor, ms-pujas/ms-catalogo/ms-usuarios no van a poder validar tokens de
+# martillero/administrador.
+entra_tenant_id       = "00000000-0000-0000-0000-000000000000"

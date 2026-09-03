@@ -1,7 +1,7 @@
-# Cluster de ECS + las 4 Task Definitions + los 4 Services. `ms-pujas` valida JWT real desde el
-# arranque (JWT_ISSUER_URI_COGNITO ya está disponible antes de crear la Task Definition, a diferencia
-# de la primera vez a mano, donde Cognito no existía todavía y hubo que empezar con el perfil "local" y
-# migrar después — ver docs/despliegue-aws.md sección 9).
+# Cluster de ECS + las 4 Task Definitions + los 4 Services. Los tres microservicios validan JWT real
+# desde el arranque (JWT_ISSUER_URI_COGNITO/ENTRA ya están disponibles antes de crear la Task
+# Definition, a diferencia de la primera vez a mano, donde Cognito no existía todavía y hubo que
+# empezar con el perfil "local" y migrar después — ver docs/despliegue-aws.md sección 9).
 
 resource "aws_ecs_cluster" "subastalive" {
   name = "${var.project_name}-cluster"
@@ -56,6 +56,8 @@ resource "aws_ecs_task_definition" "pujas" {
         { name = "DB_POOL_MAX_SIZE", value = "5" },
         { name = "MS_CATALOGO_BASE_URL", value = "http://${aws_lb.subastalive.dns_name}" },
         { name = "JWT_ISSUER_URI_COGNITO", value = "https://cognito-idp.${var.aws_region}.amazonaws.com/${aws_cognito_user_pool.postores.id}" },
+        { name = "JWT_ISSUER_URI_ENTRA", value = "https://login.microsoftonline.com/${var.entra_tenant_id}/v2.0" },
+        { name = "ALLOWED_ORIGIN", value = "https://${aws_lb.frontend.dns_name}" },
       ]
       logConfiguration = {
         logDriver = "awslogs"
@@ -95,7 +97,7 @@ resource "aws_ecs_service" "pujas" {
   depends_on = [aws_lb_listener.subastalive_http]
 }
 
-# ---------- ms-catalogo (stub) ----------
+# ---------- ms-catalogo ----------
 
 resource "aws_ecs_task_definition" "catalogo" {
   family                   = "${var.project_name}-ms-catalogo"
@@ -116,7 +118,16 @@ resource "aws_ecs_task_definition" "catalogo" {
       ]
       environment = [
         { name = "SERVER_PORT", value = "8082" },
+        { name = "DB_HOST", value = aws_db_instance.subastalive.address },
+        { name = "DB_PORT", value = "5432" },
+        { name = "DB_NAME", value = "subastalive" },
+        { name = "DB_USERNAME", value = "subastalive" },
+        { name = "DB_PASSWORD", value = var.db_master_password },
+        { name = "DB_POOL_MAX_SIZE", value = "5" },
         { name = "MS_PUJAS_BASE_URL", value = "http://${aws_lb.subastalive.dns_name}" },
+        { name = "JWT_ISSUER_URI_COGNITO", value = "https://cognito-idp.${var.aws_region}.amazonaws.com/${aws_cognito_user_pool.postores.id}" },
+        { name = "JWT_ISSUER_URI_ENTRA", value = "https://login.microsoftonline.com/${var.entra_tenant_id}/v2.0" },
+        { name = "ALLOWED_ORIGIN", value = "https://${aws_lb.frontend.dns_name}" },
       ]
       logConfiguration = {
         logDriver = "awslogs"
@@ -137,8 +148,8 @@ resource "aws_ecs_service" "catalogo" {
   desired_count   = 1
   launch_type     = "FARGATE"
 
-  # Node/Express arranca casi al instante, a diferencia de Spring Boot — no necesita el mismo margen.
-  health_check_grace_period_seconds = 60
+  # Spring Boot tarda ~90s en arrancar (JPA + Flyway + pool de conexiones), mismo motivo que ms-pujas.
+  health_check_grace_period_seconds = 240
 
   network_configuration {
     subnets          = [aws_subnet.private_1a.id, aws_subnet.private_1b.id]
@@ -155,7 +166,7 @@ resource "aws_ecs_service" "catalogo" {
   depends_on = [aws_lb_listener.subastalive_http]
 }
 
-# ---------- ms-usuarios (stub) ----------
+# ---------- ms-usuarios ----------
 
 resource "aws_ecs_task_definition" "usuarios" {
   family                   = "${var.project_name}-ms-usuarios"
@@ -176,7 +187,19 @@ resource "aws_ecs_task_definition" "usuarios" {
       ]
       environment = [
         { name = "SERVER_PORT", value = "8081" },
+        { name = "DB_HOST", value = aws_db_instance.subastalive.address },
+        { name = "DB_PORT", value = "5432" },
+        { name = "DB_NAME", value = "subastalive" },
+        { name = "DB_USERNAME", value = "subastalive" },
+        { name = "DB_PASSWORD", value = var.db_master_password },
+        { name = "DB_POOL_MAX_SIZE", value = "5" },
+        # RDS exige TLS y el driver "pg" de Node no lo activa solo — sin esto falla con
+        # "no pg_hba.conf entry ... no encryption" (ver ms-usuarios/db.js y despliegue-aws.md, sección 12).
+        { name = "DB_SSL", value = "true" },
         { name = "MS_PUJAS_BASE_URL", value = "http://${aws_lb.subastalive.dns_name}" },
+        { name = "JWT_ISSUER_URI_COGNITO", value = "https://cognito-idp.${var.aws_region}.amazonaws.com/${aws_cognito_user_pool.postores.id}" },
+        { name = "JWT_ISSUER_URI_ENTRA", value = "https://login.microsoftonline.com/${var.entra_tenant_id}/v2.0" },
+        { name = "ALLOWED_ORIGIN", value = "https://${aws_lb.frontend.dns_name}" },
       ]
       logConfiguration = {
         logDriver = "awslogs"
@@ -197,6 +220,8 @@ resource "aws_ecs_service" "usuarios" {
   desired_count   = 1
   launch_type     = "FARGATE"
 
+  # Node/Express arranca casi al instante, a diferencia de Spring Boot — no necesita el mismo margen
+  # que ms-pujas/ms-catalogo, ni siquiera con la verificación del esquema al arrancar (db.js).
   health_check_grace_period_seconds = 60
 
   network_configuration {
