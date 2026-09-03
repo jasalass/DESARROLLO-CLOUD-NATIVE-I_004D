@@ -178,13 +178,23 @@ export function LandingPage() {
         </div>
       </section>
 
-      <section className="cta-band">
-        <h2>¿Listo para tu primera puja?</h2>
-        <p>Crear una cuenta toma menos de un minuto.</p>
-        <Link to="/login" className="btn-lg btn-lg-primary">
-          Crear cuenta gratis
-        </Link>
-      </section>
+      {isAuthenticated ? (
+        <section className="cta-band">
+          <h2>¿Buscas tu próximo lote?</h2>
+          <p>Revisa las subastas abiertas ahora mismo.</p>
+          <Link to="/subastas" className="btn-lg btn-lg-primary">
+            Ver subastas en vivo
+          </Link>
+        </section>
+      ) : (
+        <section className="cta-band">
+          <h2>¿Listo para tu primera puja?</h2>
+          <p>Crear una cuenta toma menos de un minuto.</p>
+          <Link to="/login" className="btn-lg btn-lg-primary">
+            Crear cuenta gratis
+          </Link>
+        </section>
+      )}
     </>
   );
 }
