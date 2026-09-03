@@ -73,7 +73,7 @@ sequenceDiagram
         MC->>MC: extraerRol asigna ROLE_POSTOR, ROLE_MARTILLERO o ROLE_ADMINISTRADOR
         MC->>CU: resolverIdentificador()
         CU-->>MC: oid (Entra ID) o sub (Cognito)
-        MC-->>C: 200/201 en rutas de consulta; 403 en rutas de escritura si el rol no es Martillero/Administrador
+        MC-->>C: 200/201 en rutas de consulta, o 403 en rutas de escritura si el rol no es Martillero/Administrador
     end
 ```
 
