@@ -127,6 +127,15 @@ Devuelve (y provisiona si no existe) el perfil del usuario autenticado.
   misma llamada usando el `sub`, el `rol` y los claims `name`/`email`/`phone_number` disponibles en el
   token, con `fechaRegistro = ahora`. Este endpoint **no debe responder 404** en el flujo normal — siempre
   devuelve un perfil, recién creado o existente.
+- **Importante — registrarse en Cognito/Entra ID no crea nada acá.** El proveedor de identidad solo sabe de
+  la cuenta de login; la fila en `schema_usuarios.usuarios` no existe hasta la primera vez que alguien llama
+  a este endpoint con un token válido de ese `sub`. El frontend dispara esa primera llamada apenas se
+  completa el login (`CallbackPostorPage.jsx`/`CallbackStaffPage.jsx`, sin esperar a que el usuario entre a
+  "Mi perfil"), precisamente para que el registro en el proveedor de identidad y el alta en esta base queden
+  lo más pegados posible en el tiempo — pero si esa llamada llegara a fallar (red, RDS caído), el usuario
+  puede seguir usando la app con normalidad: `ms-pujas`/`ms-catalogo` no dependen de que exista esta fila, y
+  la próxima vez que alguien llame a este endpoint (por ejemplo, al visitar "Mi perfil") la crea igual, de
+  forma idempotente.
 - **Response `200 OK`:**
   ```json
   {

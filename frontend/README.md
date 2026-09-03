@@ -73,6 +73,17 @@ activo — ambos exponen el mismo `AuthContext` (`session`, `role`, `loginPostor
   `oidcConfig.js`) — si se limpia la sesión local *después* de redirigir (o no se limpia), la app vuelve a
   mostrar al usuario como autenticado al volver, porque el access token todavía no expiró.
 
+**Registrarse en Cognito/Entra ID no crea nada en la base de datos de la aplicación por sí solo** — el
+proveedor de identidad solo guarda la cuenta de login (email/contraseña o el directorio de Azure). El perfil
+de negocio (`schema_usuarios.usuarios`, dueño de `ms-usuarios`) recién se crea cuando el frontend llama a
+`GET /usuarios/me` con un token válido de ese `sub`, y esa llamada la disparan `CallbackPostorPage.jsx`/
+`CallbackStaffPage.jsx` apenas termina `signinRedirectCallback()`, sin esperar a que el usuario visite
+"Mi perfil" — sin esto, alguien podía loguearse, pujar y navegar toda la sesión sin tener nunca una fila
+propia en esa base. La llamada no bloquea la redirección ni falla el login si el backend no responde: si
+falla, queda pendiente y se resuelve solo la próxima vez que algo llame a `GET /usuarios/me` (es
+idempotente — ver [`../ms-usuarios/README.md`](../ms-usuarios/README.md), sección "Decisión tomada —
+auto-provisioning").
+
 **El backend recibe el `id_token`, no el `access_token`, como Bearer** (`sessionFromOidcUser()` en
 `AuthContext.jsx`). No es una elección arbitraria: se probó primero con el `access_token` y falló para los
 dos proveedores. El de Cognito no incluye el claim `aud` (usa `client_id` en su lugar, así que cualquier

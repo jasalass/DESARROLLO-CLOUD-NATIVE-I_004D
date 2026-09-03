@@ -546,6 +546,38 @@ Crea un usuario de prueba:
     > error: la primera vez que inicies sesión por el Hosted UI, Cognito te va a pedir definir una
     > contraseña nueva ahí mismo, como parte del flujo. Si quieres evitarte ese paso, puedes ir a
     > **Users → tu usuario → Actions → Set password** y ahí sí marcarla como permanente.
+    >
+    > **Este usuario todavía no existe en la base de datos de la aplicación.** Crearlo acá solo lo da de
+    > alta en el user pool de Cognito — la fila correspondiente en `schema_usuarios.usuarios` (dueña
+    > `ms-usuarios`) recién se crea con la primera llamada real a `GET /usuarios/me`, que el frontend dispara
+    > solo apenas se completa el login (ver [`../ms-usuarios/README.md`](../ms-usuarios/README.md), sección
+    > "Decisión tomada — auto-provisioning"). Si pruebas contra `ms-usuarios` directo (sin pasar por el
+    > frontend), acordate de hacer esa llamada vos mismo primero.
+
+### Personalizar el diseño del Hosted UI (opcional)
+
+Por defecto, Cognito redirige a una página genérica en su propio dominio
+(`https://<prefijo>.auth.<región>.amazoncognito.com`) que no se parece en nada al resto de la app. Hay dos
+formas de personalizarla, ninguna cambia el flujo Authorization Code + PKCE que ya usa el frontend
+(`oidc-client-ts`) — solo cambia cómo se ve la página a la que Cognito redirige:
+
+1. **Managed Login (recomendado)** — la versión moderna, con un editor visual, sin escribir CSS a mano:
+   **User pools → tu pool → App integration**, sección **"Branding"** (o "Login pages", según la versión de
+   consola) → crea o edita la configuración de marca. Ahí se sube el logo, se elige la paleta (fondo, texto,
+   botones) y la forma de los bordes — conviene apuntar a los mismos tokens que ya usa
+   `frontend/src/styles.css` (fondo oscuro, dorado como color de acento) para que se sienta parte de la misma
+   marca. La consola pide asignar esa configuración al cliente de aplicación `subastalive-frontend`.
+2. **CSS clásico (si tu pool no tiene Managed Login disponible)** — **App integration → Hosted UI → Edit**
+   (o **"UI customization"** en consolas más antiguas): permite subir un logo y pegar un bloque de CSS con
+   selectores fijos que documenta AWS (`.background-customizable`, `.submitButton-customizable`, etc.). Más
+   limitado que Managed Login, pero sirve si la cuenta todavía no tiene la opción nueva habilitada.
+
+En ambos casos la página sigue viviendo en el dominio de Cognito, no en el tuyo — para que quedara bajo
+`subastalive.com/login` (por ejemplo) haría falta un dominio propio delegado en Route 53 con su certificado
+en ACM, algo que normalmente no es viable en un Lab de AWS Academy porque no hay un dominio real que se
+pueda administrar. La otra alternativa, armar un formulario de registro/login propio dentro de la SPA
+llamando directo al SDK de Cognito en vez de redirigir al Hosted UI, sí sería un cambio de arquitectura de
+autenticación (no solo de estilos) — no es lo que está implementado en este proyecto.
 
 ### Probar el login de Cognito en local, antes de tocar nada en AWS
 
@@ -956,7 +988,10 @@ ALB por eso).
    `subastalive-ms-catalogo`/`subastalive-ms-usuarios`, LabRole, imagen escrita a mano (`:latest`, todavía no
    existe la primera vez), puerto del contenedor `8082`/`8081`, variables `SERVER_PORT` y
    `MS_PUJAS_BASE_URL=http://<DNS-de-subastalive-alb>` (las llamadas internas a `ms-pujas` también pasan por
-   el mismo ALB, sin necesitar Service Discovery aparte).
+   el mismo ALB, sin necesitar Service Discovery aparte). Esas dos variables alcanzan mientras el servicio es
+   un stub sin base de datos ni JWT real — en cuanto deja de serlo (ver el recuadro más abajo, para
+   `ms-usuarios`), hace falta agregar el mismo bloque `DB_*`/`JWT_ISSUER_URI_*` que ya tiene `ms-pujas`
+   (sección 6) y `ms-catalogo`.
 6. **Service de ECS** por servicio: subredes privadas, `subastalive-ecs-sg`, Public IP OFF, Load balancing →
    **usar un ALB existente** → `subastalive-alb` → **usar un listener existente** → `HTTP:80` → **usar un
    target group existente** → el que corresponda. Grace period `60` segundos (Node/Express arranca rápido).
@@ -1004,6 +1039,33 @@ puerto 8082 (dentro de su propio contenedor no hay nada escuchando ahí), y cual
 del tipo "No se pudo validar la subasta ... contra ms-catalogo" — el síntoma aparece recién al pujar
 (`POST /pujas`), no al listar ni ver el detalle de una subasta, porque esas rutas no necesitan la llamada
 interna de vuelta hacia `ms-catalogo`.
+
+### Reemplazar el stub de ms-usuarios por la implementación real — dos incidentes reales
+
+`ms-usuarios` empezó como un stub en memoria con Task Definition mínima (`SERVER_PORT` y
+`MS_PUJAS_BASE_URL` nada más — ver el paso 5 de arriba). Al reemplazarlo por la implementación real
+(Node/Express + PostgreSQL, ver [`../ms-usuarios/README.md`](../ms-usuarios/README.md)) aparecieron dos
+problemas que no se dieron en `ms-pujas`/`ms-catalogo`, porque son propios del stack Node, no de Spring Boot:
+
+> **`DB_HOST` olvidado al armar la Task Definition nueva.** Al agregar de una sola vez las 10 variables que
+> ahora necesita el servicio (`DB_NAME`, `DB_PASSWORD`, `DB_POOL_MAX_SIZE`, `DB_PORT`, `DB_USERNAME`,
+> `JWT_ISSUER_URI_COGNITO`, `JWT_ISSUER_URI_ENTRA`, `ALLOWED_ORIGIN`, `MS_PUJAS_BASE_URL`, `SERVER_PORT`),
+> es fácil saltarse `DB_HOST` porque alfabéticamente queda primero, antes de `DB_NAME`, y una lista larga
+> se revisa de arriba a abajo sin fijarse en qué falta. Sin ella, `ms-usuarios/src/db.js` cae al valor por
+> defecto `localhost`, y dentro del contenedor de Fargate no hay nada escuchando ahí — el síntoma es un
+> `500 ERROR_INTERNO` en cualquier endpoint que toque la base (`GET /usuarios/me` incluido), con
+> `ECONNREFUSED` o `getaddrinfo ENOTFOUND localhost` en el log de CloudWatch de la tarea. La lección general:
+> después de armar una Task Definition con muchas variables, conviene compararla campo por campo contra la
+> de otro servicio que ya funciona (`ms-pujas`/`ms-catalogo`), no solo revisarla de memoria.
+>
+> **RDS exige TLS y el driver `pg` de Node no lo activa solo.** Con `DB_HOST` ya corregido, el error cambió a
+> `no pg_hba.conf entry for host "...", user "subastalive", database "subastalive", no encryption` — RDS
+> Postgres rechaza conexiones sin cifrar. El driver JDBC que usan `ms-pujas`/`ms-catalogo` negocia TLS por
+> defecto (modo `prefer`), pero el driver `pg` de Node no lo intenta a menos que se lo pidas explícitamente
+> en el `Pool`. La solución quedó en `ms-usuarios/src/db.js`: una variable `DB_SSL` que, en `true`, agrega
+> `ssl: { rejectUnauthorized: false }` a la configuración del pool — condicionada por variable de entorno
+> para no romper la conexión sin TLS que usa el Postgres local de Docker Compose. Falta agregar
+> `DB_SSL=true` en la Task Definition de AWS (no hace falta en local).
 
 ## 13. Costos y limpieza
 
@@ -1057,9 +1119,10 @@ valores nuevos.
 - [x] `http://<DNS-del-ALB>/health` responde `ms-pujas up`
 - [x] Cambiado del perfil `local` a `JWT_ISSUER_URI_COGNITO` una vez que Cognito existió — valida JWT reales, no el token simplificado
 
-**`ms-catalogo` (real, mismo patrón que `ms-pujas`) y `ms-usuarios` (todavía stub):**
+**`ms-catalogo` y `ms-usuarios` (ambos reales — mismo patrón que `ms-pujas`, `ms-usuarios` fue el último en dejar de ser stub):**
 - [x] Repos en ECR, Task Definitions con `SERVER_PORT` y las variables `MS_PUJAS_BASE_URL`/`MS_CATALOGO_BASE_URL` apuntando al ALB compartido en **ambos** sentidos — no solo la del que se despliega, también la del que lo llama a él (`MS_CATALOGO_BASE_URL` de `ms-pujas` quedó en `localhost` mucho después de que `ms-catalogo` ya estaba real, y solo se notaba al pujar)
 - [x] `ms-catalogo` con `JWT_ISSUER_URI_COGNITO`, `JWT_ISSUER_URI_ENTRA`, `DB_*` y sin `SPRING_PROFILES_ACTIVE=local` — mismo patrón que `ms-pujas`
+- [x] `ms-usuarios` con el mismo bloque `DB_*`/`JWT_ISSUER_URI_*`/`ALLOWED_ORIGIN`, más `DB_SSL=true` (RDS exige TLS y el driver `pg` de Node no lo activa solo — ver el recuadro de la sección 12) — la Task Definition inicial se armó sin `DB_HOST` por error y quedó corregido en una revisión posterior
 - [x] Comparten `subastalive-ecs-sg` (3 reglas: 8083/8082/8081, todas desde `subastalive-alb-sg`) — no se creó un security group por servicio
 - [x] Comparten `subastalive-alb` — no un ALB por microservicio — con reglas de listener por path (`/subastas*`+`/lotes*` → `ms-catalogo`, `/usuarios*` → `ms-usuarios`, todo lo demás → `ms-pujas` por defecto)
 - [x] Enrutamiento por path probado con curl contra cada ruta real (no contra `/health`, que siempre cae en la regla por defecto)
@@ -1092,5 +1155,17 @@ valores nuevos.
 - [x] Sabes en qué orden apagar todo cuando termines (empezando por el NAT Gateway)
 
 **Pendiente, fuera del alcance de esta guía de infraestructura:**
-- [ ] `ms-usuarios` sigue siendo un stub sin persistencia real ni validación JWT — reemplazarlo no debería requerir tocar nada de lo de arriba (mismo patrón que ya se siguió con `ms-catalogo`)
-- [ ] Rama `feature/ms-usuarios` de un compañero con una implementación real parcial, pendiente de rehacer con historia de git correcta antes de integrar
+- [x] `ms-usuarios` ya no es un stub — implementación real con persistencia y validación JWT (ver
+      [`../ms-usuarios/README.md`](../ms-usuarios/README.md)); los dos incidentes de su primer despliegue real
+      (`DB_HOST` faltante, TLS obligatorio de RDS) están documentados en la sección 12 y ya corregidos
+- [ ] Aplicar en AWS el cambio de Terraform que agrega `phone_number` como atributo del user pool de Cognito
+      (`infra-terraform/cognito.tf`) — pendiente a propósito, porque recrea el user pool y borra las cuentas
+      de postor existentes; ver el comentario en el propio archivo antes de correr `terraform apply`
+- [ ] Configurar a mano en Entra ID el *optional claim* `phone_number` (App registration → Token
+      configuration) y cargar el método de autenticación por teléfono en los usuarios de prueba, para que
+      `ms-usuarios` también reciba el teléfono de martilleros/administradores — puede no estar disponible
+      según la política del tenant (ver sección 8)
+- [ ] Rama `feature/ms-usuarios` de un compañero: se rescataron a mano los archivos nuevos y útiles hacia
+      `main` (historia de git no relacionada, no se pudo hacer un merge real), pero el problema de origen —
+      la rama nace de un `git init` nuevo en vez de un `git clone` — sigue sin resolverse; si ese compañero
+      vuelve a aportar código, va a repetirse a menos que reclone el repositorio correctamente

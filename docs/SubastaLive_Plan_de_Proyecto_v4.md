@@ -281,11 +281,11 @@ protegida según el rol del usuario, para que solo quien corresponde pueda ejecu
 | Historia | Estado |
 |---|---|
 | HU-01 Iniciar sesión postor (Cognito) | ✅ Implementada |
-| HU-02 Consultar subastas | ✅ Implementada (`ms-catalogo`, con datos de ejemplo — persistencia real pendiente) |
+| HU-02 Consultar subastas | ✅ Implementada en `ms-catalogo`, con persistencia real en RDS |
 | HU-03 Emitir puja (parte de Etapa 1: RF-06, RF-07, RF-08) | ✅ Implementada en `ms-pujas`, con persistencia real en RDS |
-| HU-06 Historial | 🔶 Contrato implementado en `ms-usuarios`, sin persistencia real ni validación JWT todavía |
-| HU-07 Publicar lote | 🔶 Contrato implementado en `ms-catalogo` (stub), sin persistencia real todavía |
-| HU-13 Control de acceso (RF-29, RF-30) | ✅ Implementado en `ms-pujas` (defensa en profundidad real: API Gateway + microservicio). Pendiente en `ms-usuarios`/`ms-catalogo` |
+| HU-06 Historial | ✅ Implementada en `ms-usuarios`, con persistencia real en RDS y validación JWT multi-issuer |
+| HU-07 Publicar lote | ✅ Implementada en `ms-catalogo`, con persistencia real en RDS |
+| HU-13 Control de acceso (RF-29, RF-30) | ✅ Implementado en los tres microservicios (`ms-pujas`, `ms-catalogo`, `ms-usuarios`) — defensa en profundidad real: autorizador Lambda multi-issuer en el API Gateway, y validación JWT otra vez dentro de cada servicio |
 | HU-14 Iniciar sesión operativo (Entra ID) | ✅ Implementada |
 
 ## 4. Estrategia de desarrollo incremental
@@ -387,16 +387,17 @@ conexiones (HikariCP) con un límite máximo reducido por contenedor (RNF-05). C
 entorno de alta demanda se contempla la incorporación de Amazon RDS Proxy; no forma parte del alcance
 de las entregas.
 
-Confirmado en la práctica con Flyway en `ms-pujas`: migra su esquema (`schema_pujas`) automáticamente
-al arrancar, sin ningún paso manual contra RDS — ni la primera vez ni en despliegues posteriores.
-`ms-catalogo` y `ms-usuarios` (stubs) todavía no persisten en RDS de verdad.
+Confirmado en la práctica con Flyway en `ms-pujas` y `ms-catalogo`: cada uno migra su propio esquema
+(`schema_pujas`, `schema_catalogo`) automáticamente al arrancar, sin ningún paso manual contra RDS — ni la
+primera vez ni en despliegues posteriores.
 
-> **Aclaración de decisión:** como el proyecto terminó con microservicios en más de un stack (`ms-pujas`
-> en Spring Boot/Java, `ms-catalogo`/`ms-usuarios` con intención de Node), la migración automática de
-> esquema **no tiene que ser Flyway específicamente** — Flyway es una herramienta del ecosistema Java. Un
-> microservicio en Node puede lograr el mismo mecanismo (migraciones versionadas, sin acceso manual a
-> RDS) con una herramienta nativa como `node-pg-migrate`. El requisito real es el mecanismo, no la
-> herramienta puntual — ver [`db/README.md`](../db/README.md).
+> **Aclaración de decisión:** como el proyecto terminó con microservicios en más de un stack (`ms-pujas` y
+> `ms-catalogo` en Spring Boot/Java, `ms-usuarios` en Node), la migración automática de esquema **no tiene
+> que ser Flyway específicamente** — Flyway es una herramienta del ecosistema Java. `ms-usuarios` logra el
+> mismo mecanismo a mano: aplica su propio `V1__init.sql` (`CREATE SCHEMA/TABLE IF NOT EXISTS`, idempotente)
+> contra `schema_usuarios` en cada arranque, sin depender de una herramienta como `node-pg-migrate` — el
+> requisito real es el mecanismo (sin acceso manual a RDS), no la herramienta puntual — ver
+> [`db/README.md`](../db/README.md).
 
 ### 5.3 Mensajería: dos plataformas complementarias
 
@@ -462,12 +463,12 @@ Estado real de la Etapa 1:
 
 | Microservicio | Previsto | Estado real |
 |---|---|---|
-| `ms-usuarios` | Spring Boot (planeado originalmente, libre) | Stub liviano en **Node/Express**, desplegado en AWS. Sin validación JWT real todavía (ver sección 14) |
-| `ms-catalogo` | — | Stub liviano en **Node/Express**, desplegado en AWS. Sin persistencia real todavía |
+| `ms-usuarios` | Spring Boot (planeado originalmente, libre) | **Implementado de verdad en Node/Express.** Persistencia real en RDS (sin Flyway: aplica su propio SQL de esquema al arrancar), validación JWT real multi-issuer contra el JWKS de cada proveedor, probado en Docker Compose local y desplegado en ECS/Fargate |
+| `ms-catalogo` | — | **Implementado de verdad en Java/Spring Boot.** Persistencia real (RDS + Flyway), validación JWT real multi-issuer, probado en Docker Compose local y desplegado en ECS/Fargate |
 | `ms-pujas` | — | **Implementado de verdad en Java/Spring Boot.** Persistencia real (RDS + Flyway), validación JWT real multi-issuer, probado en Docker Compose local y desplegado en ECS/Fargate |
 
-El stack de cada microservicio quedó libre — el equipo terminó dividido entre Java (`ms-pujas`) y Node
-(`ms-catalogo`/`ms-usuarios`), sin que eso afecte el contrato JSON compartido entre ellos.
+El stack de cada microservicio quedó libre — el equipo terminó dividido entre Java (`ms-pujas`, `ms-catalogo`)
+y Node (`ms-usuarios`), sin que eso afecte el contrato JSON compartido entre ellos.
 
 ### 5.6 Identidad con dos proveedores — confirmado e implementado
 
@@ -509,6 +510,16 @@ La decisión se implementó exactamente como se diseñó, incluyendo:
 > siquiera trae el claim `roles`). Y como Cognito no emite ningún claim de rol explícito, los microservicios
 > tuvieron que asumir el mismo criterio que ya usaba el frontend: un token de Cognito sin rol implica
 > `POSTOR`, porque ese proveedor no se usa para nada más.
+
+> **Registrarse en el proveedor de identidad no crea nada en la base de datos propia del sistema.** Cognito
+> y Entra ID solo administran la cuenta de login; el perfil de dominio (`schema_usuarios.usuarios`, dueño
+> `ms-usuarios`) se crea recién con la primera llamada a `GET /usuarios/me` con un token válido de ese `sub`
+> (auto-provisioning, ver `ms-usuarios/README.md`). Al principio esa llamada solo ocurría si el usuario
+> visitaba "Mi perfil", lo que significaba que alguien podía loguearse, pujar y navegar toda una sesión sin
+> tener nunca una fila propia en esa base. El frontend ahora dispara esa llamada apenas se completa el login
+> (`CallbackPostorPage.jsx`/`CallbackStaffPage.jsx`), sin bloquear la redirección ni fallar el login si el
+> backend no responde — como el endpoint es idempotente, si esa llamada falla se resuelve sola la próxima
+> vez que algo la invoque.
 
 > **Aclaración importante sobre terminología, surgida al revisar la rúbrica de la asignatura:** la pauta de
 > evaluación (plantilla genérica de Duoc, no específica de este proyecto) usa el término "BFF" para referirse
@@ -601,11 +612,11 @@ tecnología y la entrega es mediante enlaces a GitHub.
 
 | Requerimiento | Elemento que lo cubre | Estado |
 |---|---|---|
-| R1.1 | Tres microservicios separados por dominio | ✅ `ms-pujas` y `ms-catalogo` en Spring Boot; `ms-usuarios` en Node/Express (stub) |
+| R1.1 | Tres microservicios separados por dominio | ✅ `ms-pujas` y `ms-catalogo` en Spring Boot; `ms-usuarios` en Node/Express — los tres con implementación real, no stubs |
 | R1.2 | Aplicación SPA con vistas funcionales | ✅ React + Vite, diseño propio, probada en local y desplegada en AWS |
 | R1.3 | Build reproducible y pruebas básicas | ✅ `ms-pujas`/`ms-catalogo` con tests Mockito; build de Docker reproducible para los 4 componentes |
-| R1.4 | Entidades, repositorios y esquema por servicio en RDS | ✅ `ms-pujas` y `ms-catalogo` (JPA + Flyway). 🔶 `ms-usuarios` sin persistencia real todavía |
-| R1.5 | Filtro de validación de JWT por microservicio | ✅ `ms-pujas` y `ms-catalogo` (`SecurityConfig.java`, multi-issuer real, probado con Cognito y Entra ID). ❌ `ms-usuarios` decodifica el JWT pero no verifica firma/issuer/expiración (ver sección 14) |
+| R1.4 | Entidades, repositorios y esquema por servicio en RDS | ✅ `ms-pujas` y `ms-catalogo` con JPA + Flyway; `ms-usuarios` con su propio esquema en RDS, aplicado a mano al arrancar (Node no tiene un equivalente estándar de Flyway) |
+| R1.5 | Filtro de validación de JWT por microservicio | ✅ Los tres servicios verifican firma, issuer y expiración contra el JWKS de cada proveedor — `ms-pujas`/`ms-catalogo` con `SecurityConfig.java` (Spring Security), `ms-usuarios` con `security/jwt.js` escrito a mano, mismo criterio en los tres |
 | R1.6 | Login OIDC y adjunción del token | ✅ Cognito y Entra ID, ambos probados de punta a punta, con logout real incluido |
 | R1.7 | `.gitignore` por tecnología | ✅ Configurado en los 4 componentes + `infra-terraform/` |
 | R1.8 | Repositorios en GitHub | ✅ Monorepo único, con ramas de feature |
@@ -617,9 +628,9 @@ tecnología y la entrega es mediante enlaces a GitHub.
 | R1.14 | Flujo Authorization Code con PKCE | ✅ Confirmado en ambos proveedores, incluyendo el detalle de que PKCE exige un contexto seguro (HTTPS) — ver sección 14 |
 | R1.15 | Backend y frontend desplegados e integrados en la nube | ✅ Los 4 componentes corriendo en ECS/Fargate, con CI/CD real (GitHub Actions) para cada uno |
 
-**Resumen:** 14 de 15 requisitos completamente cumplidos, 1 con cumplimiento parcial (persistencia y
-validación JWT de `ms-usuarios`, el único de los tres microservicios que sigue siendo un stub) — no requiere
-cambios de arquitectura, es una continuación directa de lo ya construido en `ms-pujas` y `ms-catalogo`.
+**Resumen:** 15 de 15 requisitos completamente cumplidos. `ms-usuarios` dejó de ser un stub y quedó con
+persistencia y validación JWT real, siguiendo el mismo patrón ya construido en `ms-pujas` y `ms-catalogo` —
+sin cambios de arquitectura.
 
 ## 7. Etapa 2 — Mensajería asíncrona con RabbitMQ
 
@@ -873,7 +884,8 @@ La arquitectura de la Etapa 1, ya construida y probada, queda así:
 └────────────────────────┬───────────────────────────────────────────┘
                           │ HTTPS + JWT (Bearer)
 ┌────────────────────────▼───────────────────────────────────────────┐
-│ BORDE — API Gateway HTTP API, autorizador JWT nativo contra Cognito │
+│ BORDE — API Gateway HTTP API, autorizador Lambda multi-issuer      │
+│ (valida Cognito o Entra ID según el iss del token, JWKS de ambos)  │
 └────────────────────────┬───────────────────────────────────────────┘
                           │ /{proxy+} → un solo ALB
 ┌────────────────────────▼───────────────────────────────────────────┐
@@ -884,14 +896,14 @@ La arquitectura de la Etapa 1, ya construida y probada, queda así:
        │                     │                       │
 ┌──────▼──────┐     ┌────────▼────────┐     ┌────────▼─────────────┐
 │ ms-pujas    │     │ ms-catalogo     │     │ ms-usuarios           │
-│ Spring Boot │     │ Node/Express    │     │ Node/Express          │
-│ JWT real    │     │ (stub)          │     │ (stub, JWT sin        │
-│ Flyway      │     │                 │     │  verificar firma)     │
-└──────┬──────┘     └─────────────────┘     └───────────────────────┘
-       │
-┌──────▼──────────────────────────────────────────────────────────┐
-│ RDS PostgreSQL — schema_pujas (real), schema_catalogo/usuarios   │
-│ (creados, sin uso real todavía)                                  │
+│ Spring Boot │     │ Spring Boot     │     │ Node/Express          │
+│ JWT real    │     │ JWT real        │     │ JWT real (verificado  │
+│ Flyway      │     │ Flyway          │     │ a mano contra JWKS)   │
+└──────┬──────┘     └────────┬────────┘     └───────────┬───────────┘
+       │                     │                          │
+┌──────▼─────────────────────▼──────────────────────────▼───────────┐
+│ RDS PostgreSQL — schema_pujas, schema_catalogo, schema_usuarios,   │
+│ los tres con persistencia real                                    │
 └───────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1055,3 +1067,9 @@ Resumen ejecutivo de los problemas reales de esta entrega (detalle completo en
 | El autorizador Lambda rechazaba tokens reales y válidos de los dos proveedores | El frontend mandaba el `access_token`, no el `id_token`, como Bearer — el de Cognito no lleva `aud` (lleva `client_id`), y el de Entra ID queda emitido para Microsoft Graph si no se configuró un scope de API propio, sin el claim `roles` | `AuthContext.jsx` cambiado para mandar `user.id_token` en vez de `user.access_token` |
 | Un postor real no podía pujar (`403 Solo un postor puede emitir pujas`) aunque el login funcionaba | Cognito no emite ningún claim de rol; `extraerRol()` en el backend devolvía `null` y no otorgaba `ROLE_POSTOR` | `extraerRol()` asume `POSTOR` cuando no hay claim de rol y el emisor es Cognito — mismo criterio que ya usaba el frontend |
 | Pujar como postor fallaba con "No se pudo validar la subasta ... contra ms-catalogo" | `MS_CATALOGO_BASE_URL` de `ms-pujas` seguía en el placeholder `http://localhost:8082`, de cuando `ms-catalogo` todavía no existía desplegado | Nueva revisión de la Task Definition de `ms-pujas` con `MS_CATALOGO_BASE_URL` apuntando al ALB compartido |
+| `ms-usuarios` no arrancaba tras traer archivos nuevos de la rama de un compañero | `src/db.js` usaba `require`/`module.exports` (CommonJS) dentro de un paquete declarado `"type": "module"` (ESM) — el mismo patrón de error que ya había pasado en el autorizador Lambda | Reescrito con `import`/`export` |
+| `ms-usuarios` aceptaba cualquier token sin verificar firma ni emisor, y nunca reconocía a un postor como tal | El middleware traído de esa rama usaba `jwt.decode()` (no verifica nada) y leía el rol de un claim `cognito:groups` que Cognito nunca emite en este proyecto | Verificación real contra el JWKS de cada proveedor (`security/jwt.js`) con el mismo criterio de `extraerRol()`/`resolverIdentificador()` que ya usan `ms-pujas`/`ms-catalogo` |
+| `ms-usuarios` devolvía `200` con datos falsos cuando la base o `ms-pujas` fallaban, escondiendo el error real | El código original tenía un `catch` que respondía con los datos del token en vez de propagar el error | Reemplazado por `500`/`502` reales, con el error efectivo en el log |
+| `GET /usuarios/me` daba `500` al desplegar la implementación real de `ms-usuarios` en AWS por primera vez | La Task Definition nueva se armó con 10 variables de entorno pero sin `DB_HOST` (fácil de saltar por quedar primera en orden alfabético); el servicio caía al valor por defecto `localhost`, inexistente dentro del contenedor | Nueva revisión de la Task Definition agregando `DB_HOST` con el Endpoint real de RDS |
+| Con `DB_HOST` ya corregido, `ms-usuarios` seguía sin poder leer ni escribir en la base (`no pg_hba.conf entry ... no encryption`) | RDS Postgres exige TLS; el driver `pg` de Node, a diferencia del driver JDBC que usan `ms-pujas`/`ms-catalogo`, no lo activa por su cuenta | Variable `DB_SSL` que agrega `ssl: { rejectUnauthorized: false }` al pool solo cuando está en `true`, para no romper la conexión sin TLS de Postgres local |
+| La landing page invitaba a "crear cuenta gratis" incluso a un usuario que ya había iniciado sesión | El bloque final (`cta-band`) se mostraba siempre, sin revisar `isAuthenticated` | Con sesión activa muestra en cambio una invitación a ver las subastas en vivo |

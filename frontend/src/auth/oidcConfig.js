@@ -9,6 +9,10 @@ export const cognitoSettings = {
   post_logout_redirect_uri: window.location.origin,
   response_type: "code",
   scope: "openid profile email",
+  // El idioma del Hosted UI en realidad lo decide el header Accept-Language del navegador, no este
+  // parámetro — ui_locales es el mecanismo estándar de OIDC para pedirlo, se agrega igual por si
+  // Cognito lo llega a respetar, pero no reemplaza tener el navegador en español.
+  extraQueryParams: { ui_locales: "es" },
 };
 
 // El Hosted UI de Cognito no implementa el "end_session_endpoint" estándar de OIDC — mantiene su
