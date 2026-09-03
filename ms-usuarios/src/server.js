@@ -4,9 +4,12 @@ import pkg from 'pg';
 import axios from 'axios';
 import dotenv from 'dotenv';
 
+import { verificarToken } from './middlewares/auth.js';
+
 dotenv.config();
 
 const { Pool } = pkg;
+
 
 const app = express();
 const PORT = process.env.SERVER_PORT || process.env.PORT || 8081;
