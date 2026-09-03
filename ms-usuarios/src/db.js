@@ -14,6 +14,11 @@ export const pool = new Pool({
   password: process.env.DB_PASSWORD || 'subastalive',
   database: process.env.DB_NAME || 'subastalive',
   max: parseInt(process.env.DB_POOL_MAX_SIZE || '5', 10),
+  // RDS exige TLS (pg_hba.conf rechaza conexiones sin cifrar); el driver "pg", a diferencia del
+  // driver JDBC que usan ms-pujas/ms-catalogo, no lo activa solo. rejectUnauthorized queda en false
+  // porque no se distribuye el certificado de la CA de RDS en la imagen — aceptable en este
+  // laboratorio temporal, no en un entorno productivo real.
+  ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
 });
 
 pool.on('error', (err) => {

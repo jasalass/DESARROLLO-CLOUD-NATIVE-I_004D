@@ -209,6 +209,7 @@ sequenceDiagram
 | `DB_HOST` / `DB_PORT` / `DB_NAME` | Conexión a la instancia RDS PostgreSQL (mismo `subastalive` que usan `ms-pujas`/`ms-catalogo`, cada uno en su propio esquema) |
 | `DB_USERNAME`, `DB_PASSWORD` | Credenciales de conexión |
 | `DB_POOL_MAX_SIZE` | Límite del pool de conexiones por contenedor (RNF-05) |
+| `DB_SSL` | `true` para conectarse con TLS (necesario en AWS: RDS rechaza conexiones sin cifrar); sin definir o distinto de `true` conecta sin TLS (Postgres local en Docker Compose no lo soporta) |
 | `JWT_ISSUER_URI_COGNITO` | Issuer URI del user pool de Cognito |
 | `JWT_ISSUER_URI_ENTRA` | Issuer URI del tenant de Entra ID |
 | `ALLOWED_ORIGIN` | Origen permitido para CORS (URL del frontend); `*` por defecto |
