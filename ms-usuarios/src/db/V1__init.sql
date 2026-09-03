@@ -10,8 +10,15 @@ CREATE TABLE IF NOT EXISTS schema_usuarios.usuarios (
                         CHECK (rol IN ('POSTOR', 'MARTILLERO', 'ADMINISTRADOR')),
     nombre          VARCHAR(150),
     email           VARCHAR(150),
+    telefono        VARCHAR(30),
     fecha_registro  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- No hay Flyway para este esquema (ver ms-usuarios/src/db.js), así que este archivo se re-ejecuta
+-- en cada arranque contra una base que puede ya tener la tabla creada sin esta columna. ADD COLUMN
+-- IF NOT EXISTS la agrega sin romper nada en ese caso; en una base nueva, el CREATE TABLE de arriba
+-- ya la incluye y esta línea es un no-op.
+ALTER TABLE schema_usuarios.usuarios ADD COLUMN IF NOT EXISTS telefono VARCHAR(30);
 
 -- Consultas frecuentes de administración/soporte por rol.
 CREATE INDEX IF NOT EXISTS idx_usuarios_rol ON schema_usuarios.usuarios (rol);

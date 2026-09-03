@@ -484,13 +484,20 @@ posterior.
 La consola de Cognito cambió a un asistente simplificado — ya no muestra los pasos clásicos
 "Configure sign-in experience / security requirements / ..." por separado, es un único flujo:
 
+> **Sobre el teléfono como atributo (no como método de verificación):** el pool pide `phone_number`
+> como atributo requerido del perfil, pero **no** se agrega a los atributos auto-verificados. Si se
+> auto-verificara, Cognito exigiría mandar un código por SMS antes de dejar completar el registro, lo
+> que necesita un origination number de SNS configurado — no siempre disponible en un laboratorio de
+> AWS Academy, y fuera del alcance de este proyecto. Al dejarlo solo como atributo requerido, el
+> formulario de registro pide el teléfono y lo guarda, pero nadie lo verifica.
+
 1. Consola → **Cognito → User pools → Create user pool**.
 2. **Tipo de aplicación**: **Aplicación de una sola página (SPA)** (el frontend es React).
 3. **Nombre de la aplicación**: cámbialo del valor random que trae por defecto a `subastalive-frontend`.
 4. **Opciones para los identificadores de inicio de sesión**: marca solo **Correo electrónico**.
 5. **¿Login social/SAML/OIDC?**: no, déjalo en blanco.
 6. **Autorregistro**: activa **"Habilitar el registro automático"**.
-7. **Atributos necesarios para el inicio de sesión**: marca **email**.
+7. **Atributos necesarios para el inicio de sesión**: marca **email** y **phone_number**.
 8. **URL de retorno**: `http://localhost:5173/auth/callback/postor` (agregamos la URL real de AWS más
    adelante en esta misma sección, una vez que exista).
 9. Continúa y crea. Al terminar, la consola te muestra una guía rápida con código de ejemplo
@@ -513,8 +520,9 @@ Ajustes que este asistente no te deja tocar y hay que revisar después de crear 
     - **URL de devolución de llamadas permitidas**: debería estar ya `http://localhost:5173/auth/callback/postor`.
     - **URL de cierre de sesión permitidas**: agrégala si está vacía → `http://localhost:5173`.
     - **Tipos de concesión de OAuth**: marca **Authorization code grant**.
-    - **Ámbitos de OpenID Connect**: `openid`, `email`, `profile` — si aparece `phone` marcado
-      (lo sugiere el asistente por defecto), desmárcalo.
+    - **Ámbitos de OpenID Connect**: `openid`, `email`, `profile`, `phone` — este último es necesario para
+      que el `id_token` incluya el claim `phone_number`; sin él, aunque el usuario tenga el atributo
+      cargado, `ms-usuarios` nunca lo recibe.
 13. Anota el **User pool ID** (en "Descripción general" del pool) y el **Client ID** (en el cliente de
     aplicación) — los necesitas en la sección 11 (Secrets/Variables de GitHub) y en `frontend/.env.local`
     si quieres probar en local.
@@ -522,9 +530,11 @@ Ajustes que este asistente no te deja tocar y hay que revisar después de crear 
 Crea un usuario de prueba:
 
 14. Menú izquierdo → **"Administración de usuarios" → "Usuarios" → Create user**. Email:
-    `postor.prueba@example.com`. Marca **"Marque la dirección de email como verificada"**. Deja
-    **"No enviar una invitación"**. En la contraseña, elige **"Establecer una contraseña"** y escribe una
-    que cumpla la política (mínimo 8 caracteres, mayúscula, minúscula, número y símbolo — ej. `Contra_12345`).
+    `postor.prueba@example.com`. Marca **"Marque la dirección de email como verificada"**. En
+    **Phone number**, escribe uno en formato E.164 (ej. `+56912345678`) — es obligatorio porque quedó como
+    atributo requerido, aunque nadie lo verifique. Deja **"No enviar una invitación"**. En la contraseña,
+    elige **"Establecer una contraseña"** y escribe una que cumpla la política (mínimo 8 caracteres,
+    mayúscula, minúscula, número y símbolo — ej. `Contra_12345`).
 
     > **Cuidado con espacios invisibles en el email al crear el usuario** — si lo pegas desde otro lado,
     > es fácil arrastrar un espacio al principio o al final. Eso produce un `InvalidParameterException`
@@ -632,16 +642,20 @@ Esto es Azure, no AWS — vía [portal.azure.com](https://portal.azure.com):
 5. Anota **Application (client) ID** y **Directory (tenant) ID** — la authority es
    `https://login.microsoftonline.com/<TENANT_ID>/v2.0`.
 
-### Microsoft Entra ID (martillero / administrador)
+**Opcional — exponer el teléfono del martillero/administrador en el token** (mismo campo `telefono` que ya
+guarda `ms-usuarios` para los postores vía Cognito):
 
-Esto es Azure, no AWS — vía [portal.azure.com](https://portal.azure.com):
-
-1. **Microsoft Entra ID → App registrations → New registration.** Tipo de cuenta: solo tu tenant.
-2. **Redirect URI**, tipo SPA: `http://localhost:5173/auth/callback/staff`.
-3. **App roles → Create app role:** crea `MARTILLERO` y `ADMINISTRADOR`.
-4. **Enterprise applications** → tu app → **Users and groups** → asigna un usuario de prueba a cada rol.
-5. Anota **Application (client) ID** y **Directory (tenant) ID** — la authority es
-   `https://login.microsoftonline.com/<TENANT_ID>/v2.0`.
+6. **App registrations → tu app → Token configuration → Add optional claim** → Token type **ID** → marca
+   `phone_number` → **Add**. Si el portal ofrece activar un permiso de Microsoft Graph para ese claim,
+   acéptalo.
+7. El claim solo se llena si el usuario tiene un **método de autenticación por teléfono** cargado (no
+   alcanza con que tenga un teléfono en su ficha de Microsoft 365): **Microsoft Entra ID → Users → tu
+   usuario de prueba → Authentication methods → Add authentication method → Phone** y carga un número en
+   formato E.164.
+8. Esto depende de la política de métodos de autenticación del tenant, y puede no estar disponible en todos
+   los tenants de AWS Academy/Microsoft 365 educativos. Si el claim no aparece en el token pese a estos
+   pasos, no es un bug de `ms-usuarios` — es una limitación del tenant, y el campo simplemente queda `null`
+   para ese usuario (`ms-usuarios/src/security/jwt.js`, `extraerTelefono()`, no falla si el claim falta).
 
 ## 9. Puerta de entrada — API Gateway
 

@@ -44,6 +44,39 @@ Cubre las historias:
 - Rutas de **escritura** (crear lote, programar subasta, cambiar estado) requieren rol **Martillero** o
   **Administrador** (RF-30).
 
+### Diagrama de autenticación
+
+Mismo patrón de doble validación que `ms-pujas`: el autorizador Lambda del API Gateway primero, y
+`JwtIssuerAuthenticationManagerResolver` de Spring Security otra vez dentro del servicio.
+
+```mermaid
+sequenceDiagram
+    participant C as Frontend (cualquier rol autenticado)
+    participant GW as API Gateway
+    participant LA as Autorizador Lambda
+    participant ALB as ALB compartido
+    participant MC as ms-catalogo (SecurityConfig)
+    participant CU as CurrentUser
+
+    C->>GW: Bearer id_token (Cognito o Entra ID)
+    GW->>LA: valida el token antes de reenviar nada
+    LA->>LA: descarga el JWKS del issuer (con caché) y verifica firma RS256, iss, exp
+    alt issuer no reconocido o firma invalida
+        LA-->>GW: Deny
+        GW-->>C: 401
+    else token valido
+        LA-->>GW: Allow
+        GW->>ALB: reenvia la peticion tal cual
+        ALB->>MC: enruta por path (/subastas*, /lotes*) al target group de ms-catalogo
+        MC->>MC: JwtIssuerAuthenticationManagerResolver elige el AuthenticationManager segun iss
+        MC->>MC: JwtDecoder vuelve a validar firma y expiracion contra el mismo JWKS
+        MC->>MC: extraerRol asigna ROLE_POSTOR, ROLE_MARTILLERO o ROLE_ADMINISTRADOR
+        MC->>CU: resolverIdentificador()
+        CU-->>MC: oid (Entra ID) o sub (Cognito)
+        MC-->>C: 200/201 en rutas de consulta; 403 en rutas de escritura si el rol no es Martillero/Administrador
+    end
+```
+
 ## Modelo de datos (JSON)
 
 ### `Lote`
@@ -230,6 +263,59 @@ etapa es síncrona vía HTTP.**
 - `ms-pujas` llama a **`GET /subastas/{id}/reglas`** de este servicio antes de aceptar una puja (no a
   `GET /subastas/{id}`, justamente para no encadenar una llamada de vuelta a `ms-pujas`). Ver el detalle en
   [`../ms-pujas/README.md`](../ms-pujas/README.md).
+
+### Diagrama de flujo de datos — crear un lote y programar su subasta
+
+Muestra la validación de unicidad de `POST /subastas` (`SubastaService.crear()`): un lote no puede tener dos
+subastas activas a la vez, y esa regla se aplica con una restricción de base de datos, no solo en memoria,
+para no dejar pasar una condición de carrera entre dos peticiones simultáneas.
+
+```mermaid
+sequenceDiagram
+    participant M as Martillero
+    participant MC as ms-catalogo
+    participant DB as RDS (schema_catalogo)
+
+    M->>MC: POST /lotes (titulo, descripcion, precioBase, incrementoMinimo)
+    MC->>DB: INSERT lote (martilleroSub tomado del token)
+    DB-->>MC: lote guardado
+    MC-->>M: 201 Created
+
+    M->>MC: POST /subastas (loteId, fechaApertura, fechaCierre)
+    MC->>DB: INSERT subasta con estado PROGRAMADA
+    alt el lote ya tiene una subasta activa (PROGRAMADA o ABIERTA)
+        DB-->>MC: violacion de la restriccion de unicidad
+        MC-->>M: 409 LOTE_YA_EN_SUBASTA
+    else lote libre
+        DB-->>MC: subasta guardada
+        MC-->>M: 201 Created
+    end
+```
+
+### Diagrama de flujo de datos — `GET /subastas/{id}` con degradación controlada
+
+Muestra la decisión ya documentada arriba: si `ms-pujas` no responde, el endpoint no falla completo, usa
+`precioBase` como respaldo.
+
+```mermaid
+sequenceDiagram
+    participant U as Usuario autenticado
+    participant MC as ms-catalogo
+    participant MP as ms-pujas
+    participant DB as RDS (schema_catalogo)
+
+    U->>MC: GET /subastas/{id}
+    MC->>DB: SELECT subasta + lote
+    DB-->>MC: datos de la subasta y el lote
+    MC->>MP: GET /pujas/{id}/actual (reenvia el mismo Bearer)
+    alt ms-pujas responde
+        MP-->>MC: montoActual, totalPujas, ultimaPujaFecha
+    else ms-pujas no responde o no hay pujas todavia
+        MP--xMC: timeout o montoActual null
+        MC->>MC: precioActual = lote.precioBase, totalPujas = 0
+    end
+    MC-->>U: 200 OK con lote, precioActual y totalPujas
+```
 
 ## Variables de entorno esperadas
 

@@ -31,6 +31,40 @@ Cubre las historias:
 - Emitir una puja es una acción de **Postor**. Consultar pujas puede estar disponible también para
   Martillero/Admin (por ejemplo, para ver actividad de sus subastas).
 
+### Diagrama de autenticación
+
+El token se valida dos veces por diseño (defensa en profundidad): primero el autorizador Lambda del API
+Gateway (`../lambda-authorizer/`), y de nuevo dentro del propio servicio con Spring Security — cada capa
+puede rechazar el token sin depender de que la otra lo haya hecho bien.
+
+```mermaid
+sequenceDiagram
+    participant C as Frontend (postor o martillero/admin)
+    participant GW as API Gateway
+    participant LA as Autorizador Lambda
+    participant ALB as ALB compartido
+    participant MP as ms-pujas (SecurityConfig)
+    participant CU as CurrentUser
+
+    C->>GW: Bearer id_token (Cognito o Entra ID)
+    GW->>LA: valida el token antes de reenviar nada
+    LA->>LA: descarga el JWKS del issuer (con caché) y verifica firma RS256, iss, exp
+    alt issuer no reconocido o firma invalida
+        LA-->>GW: Deny
+        GW-->>C: 401
+    else token valido
+        LA-->>GW: Allow
+        GW->>ALB: reenvia la peticion tal cual, sin tocar el path
+        ALB->>MP: enruta al target group de ms-pujas
+        MP->>MP: JwtIssuerAuthenticationManagerResolver elige el AuthenticationManager segun iss
+        MP->>MP: JwtDecoder vuelve a validar firma y expiracion contra el mismo JWKS
+        MP->>MP: extraerRol asigna ROLE_POSTOR, ROLE_MARTILLERO o ROLE_ADMINISTRADOR
+        MP->>CU: resolverIdentificador()
+        CU-->>MP: oid (Entra ID) o sub (Cognito)
+        MP-->>C: 200/201, o 403 si el rol no alcanza para la ruta
+    end
+```
+
 ## Modelo de datos (JSON)
 
 ### `Puja`
@@ -160,6 +194,33 @@ etapa es síncrona vía HTTP.**
 - `ms-usuarios` llama a `GET /pujas?usuarioSub={sub}` de este servicio (ver contrato arriba).
 - `ms-catalogo` llama a `GET /pujas/{subastaId}/actual` de este servicio (ver contrato arriba).
 - Nadie debería necesitar escribir en `schema_pujas` salvo este servicio.
+
+### Diagrama de flujo de datos — `POST /pujas`
+
+```mermaid
+sequenceDiagram
+    participant P as Postor
+    participant MP as ms-pujas
+    participant MC as ms-catalogo
+    participant DB as RDS (schema_pujas)
+
+    P->>MP: POST /pujas con subastaId y monto
+    MP->>MC: GET /subastas/{id}/reglas (reenvia el mismo Bearer)
+    MC-->>MP: estado, precioBase, incrementoMinimo
+    alt estado distinto de ABIERTA
+        MP-->>P: 409 SUBASTA_NO_ABIERTA
+    else subasta abierta
+        MP->>DB: MAX(monto) de las pujas ya guardadas para esa subasta
+        DB-->>MP: precio vigente (o precioBase si todavia no hay pujas)
+        alt monto menor a precio vigente mas incrementoMinimo
+            MP-->>P: 400 MONTO_INSUFICIENTE
+        else monto valido
+            MP->>DB: INSERT de la puja (usuarioSub del token, fecha del servidor)
+            DB-->>MP: puja guardada
+            MP-->>P: 201 Created
+        end
+    end
+```
 
 ## Variables de entorno esperadas
 

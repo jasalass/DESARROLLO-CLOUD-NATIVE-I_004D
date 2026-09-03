@@ -23,11 +23,11 @@ app.get('/health', (req, res) => {
 
 // GET /usuarios/me - Devuelve (y auto-provisiona) el perfil
 app.get('/usuarios/me', verificarToken, async (req, res) => {
-  const { sub, rol, nombre, email } = req.user;
+  const { sub, rol, nombre, email, telefono } = req.user;
 
   try {
     const existente = await pool.query(
-      'SELECT sub, rol, nombre, email, fecha_registro FROM schema_usuarios.usuarios WHERE sub = $1',
+      'SELECT sub, rol, nombre, email, telefono, fecha_registro FROM schema_usuarios.usuarios WHERE sub = $1',
       [sub]
     );
 
@@ -36,10 +36,10 @@ app.get('/usuarios/me', verificarToken, async (req, res) => {
     }
 
     const insertado = await pool.query(
-      `INSERT INTO schema_usuarios.usuarios (sub, rol, nombre, email)
-       VALUES ($1, $2, $3, $4)
-       RETURNING sub, rol, nombre, email, fecha_registro`,
-      [sub, rol, nombre, email]
+      `INSERT INTO schema_usuarios.usuarios (sub, rol, nombre, email, telefono)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING sub, rol, nombre, email, telefono, fecha_registro`,
+      [sub, rol, nombre, email, telefono]
     );
     return res.status(201).json(mapearUsuario(insertado.rows[0]));
   } catch (error) {
@@ -94,6 +94,7 @@ function mapearUsuario(row) {
     rol: row.rol,
     nombre: row.nombre,
     email: row.email,
+    telefono: row.telefono,
     fechaRegistro: new Date(row.fecha_registro).toISOString(),
   };
 }

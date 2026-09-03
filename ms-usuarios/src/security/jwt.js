@@ -73,3 +73,10 @@ export function extraerRol(payload) {
 export function extraerSub(payload) {
   return payload.oid || payload.sub;
 }
+
+// Cognito expone el numero como phone_number (scope "phone", atributo estandar del user pool, sin
+// verificacion por SMS). Entra ID lo expone igual como phone_number si se configura como optional
+// claim en el App registration. Ninguno de los dos lo garantiza: puede no venir en el token.
+export function extraerTelefono(payload) {
+  return payload.phone_number || null;
+}

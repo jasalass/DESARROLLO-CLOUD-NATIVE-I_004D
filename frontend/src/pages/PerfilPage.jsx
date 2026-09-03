@@ -20,6 +20,8 @@ export function PerfilPage() {
         <dd>{perfil.nombre ?? "—"}</dd>
         <dt>Email</dt>
         <dd>{perfil.email ?? "—"}</dd>
+        <dt>Teléfono</dt>
+        <dd>{perfil.telefono ?? "—"}</dd>
         <dt>Rol</dt>
         <dd>{perfil.rol}</dd>
         <dt>Miembro desde</dt>

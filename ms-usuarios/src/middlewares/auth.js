@@ -1,4 +1,4 @@
-import { verificarJwt, extraerRol, extraerSub } from '../security/jwt.js';
+import { verificarJwt, extraerRol, extraerSub, extraerTelefono } from '../security/jwt.js';
 
 // Middleware de autenticacion: exige un JWT valido de Cognito o Entra ID (verificado contra su
 // JWKS, no solo decodificado), salvo el formato "local:<sub>:<ROL>" reservado para pruebas locales
@@ -11,7 +11,7 @@ export async function verificarToken(req, res, next) {
     if (!sub || !rol) {
       return res.status(401).json({ codigo: 'UNAUTHORIZED', mensaje: 'Token local invalido.' });
     }
-    req.user = { sub, rol, nombre: null, email: null };
+    req.user = { sub, rol, nombre: null, email: null, telefono: null };
     return next();
   }
 
@@ -28,6 +28,7 @@ export async function verificarToken(req, res, next) {
       rol: extraerRol(payload),
       nombre: payload.name || payload.given_name || null,
       email: payload.email || payload.preferred_username || null,
+      telefono: extraerTelefono(payload),
     };
     next();
   } catch (error) {

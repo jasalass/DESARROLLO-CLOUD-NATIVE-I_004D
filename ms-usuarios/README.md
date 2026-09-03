@@ -42,6 +42,45 @@ Cubre las historias:
 - Para pruebas locales sin IdPs reales (`docker-compose.yml`), acepta además el formato simplificado
   `Bearer local:<sub>:<ROL>`, nunca usado en producción.
 
+### Diagrama de autenticación
+
+Mismo criterio que `ms-pujas`/`ms-catalogo` (doble validación: autorizador Lambda del API Gateway y de
+nuevo dentro del servicio), pero escrito a mano en Node en vez de usar Spring Security.
+
+```mermaid
+sequenceDiagram
+    participant C as Frontend (cualquier rol autenticado)
+    participant GW as API Gateway
+    participant LA as Autorizador Lambda
+    participant ALB as ALB compartido
+    participant MU as ms-usuarios (middlewares/auth.js)
+    participant JW as security/jwt.js
+
+    C->>GW: Bearer id_token (Cognito o Entra ID)
+    GW->>LA: valida el token antes de reenviar nada
+    LA->>LA: descarga el JWKS del issuer (con caché) y verifica firma RS256, iss, exp
+    alt issuer no reconocido o firma invalida
+        LA-->>GW: Deny
+        GW-->>C: 401
+    else token valido
+        LA-->>GW: Allow
+        GW->>ALB: reenvia la peticion tal cual
+        ALB->>MU: enruta por path (/usuarios*) al target group de ms-usuarios
+        MU->>JW: verificarJwt(token)
+        JW->>JW: lee iss del payload y elige el JWKS de Cognito o Entra ID
+        JW->>JW: jwt.verify() valida firma RS256, iss y exp (segunda validacion)
+        alt verificacion falla
+            JW-->>MU: excepcion
+            MU-->>C: 401
+        else verificacion correcta
+            JW-->>MU: payload verificado
+            MU->>JW: extraerRol, extraerSub, extraerTelefono
+            JW-->>MU: rol, sub u oid, telefono
+            MU-->>C: 200/201, o 403 en historial si no es su propio sub ni Administrador
+        end
+    end
+```
+
 ## Modelo de datos (JSON)
 
 ### `Usuario`
@@ -52,6 +91,7 @@ Cubre las historias:
   "rol": "POSTOR",
   "nombre": "Pamela Álvarez",
   "email": "pamela.alvarez@example.com",
+  "telefono": "+56912345678",
   "fechaRegistro": "2026-08-20T14:03:00Z"
 }
 ```
@@ -62,6 +102,7 @@ Cubre las historias:
 | `rol` | string (enum) | `POSTOR` \| `MARTILLERO` \| `ADMINISTRADOR` — tomado del claim de rol del token, no editable por el usuario |
 | `nombre` | string | Tomado del claim del token si existe (`name`), o `null` |
 | `email` | string | Tomado del claim del token si existe (`email`), o `null` |
+| `telefono` | string, o `null` | Tomado del claim `phone_number` si existe, o `null`. Ninguno de los dos proveedores lo garantiza — Cognito solo si el postor lo cargó al registrarse; Entra ID solo si el App registration lo expone como *optional claim* y el usuario tiene un método de autenticación por teléfono cargado |
 | `fechaRegistro` | string (datetime ISO-8601) | Fecha del primer login (ver auto-provisioning más abajo) |
 
 ### `ItemHistorial`
@@ -83,9 +124,9 @@ Devuelve (y provisiona si no existe) el perfil del usuario autenticado.
 - **Rol requerido:** cualquiera autenticado (Postor, Martillero, Administrador).
 - **Request:** sin body. Headers: `Authorization: Bearer <jwt>`.
 - **Decisión tomada — auto-provisioning:** si no existe un `Usuario` para el `sub` del token, se crea en esa
-  misma llamada usando el `sub`, el `rol` y los claims `name`/`email` disponibles en el token, con
-  `fechaRegistro = ahora`. Este endpoint **no debe responder 404** en el flujo normal — siempre devuelve un
-  perfil, recién creado o existente.
+  misma llamada usando el `sub`, el `rol` y los claims `name`/`email`/`phone_number` disponibles en el
+  token, con `fechaRegistro = ahora`. Este endpoint **no debe responder 404** en el flujo normal — siempre
+  devuelve un perfil, recién creado o existente.
 - **Response `200 OK`:**
   ```json
   {
@@ -93,6 +134,7 @@ Devuelve (y provisiona si no existe) el perfil del usuario autenticado.
     "rol": "POSTOR",
     "nombre": "Pamela Álvarez",
     "email": "pamela.alvarez@example.com",
+    "telefono": "+56912345678",
     "fechaRegistro": "2026-08-20T14:03:00Z"
   }
   ```
@@ -138,6 +180,27 @@ servicios en esta etapa es síncrona vía HTTP.**
   `ms-usuarios` mapea `id` → `pujaId` al construir su propia respuesta.
 
 - Nadie más debería necesitar llamar a `ms-usuarios` en la Etapa 1, salvo el frontend.
+
+### Diagrama de flujo de datos — `GET /usuarios/me` (auto-provisioning)
+
+```mermaid
+sequenceDiagram
+    participant U as Usuario autenticado
+    participant MU as ms-usuarios
+    participant DB as RDS (schema_usuarios)
+
+    U->>MU: GET /usuarios/me
+    MU->>DB: SELECT usuario por sub
+    alt el usuario ya existe
+        DB-->>MU: fila existente
+        MU-->>U: 200 OK con el perfil guardado
+    else primer login de este sub
+        DB-->>MU: sin resultados
+        MU->>DB: INSERT usuario (sub, rol, nombre, email, telefono desde el token)
+        DB-->>MU: fila creada, fechaRegistro = ahora
+        MU-->>U: 201 Created con el perfil recien creado
+    end
+```
 
 ## Variables de entorno esperadas
 
