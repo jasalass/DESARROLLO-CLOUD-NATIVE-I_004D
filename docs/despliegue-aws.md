@@ -674,6 +674,26 @@ Esto es Azure, no AWS — vía [portal.azure.com](https://portal.azure.com):
 5. Anota **Application (client) ID** y **Directory (tenant) ID** — la authority es
    `https://login.microsoftonline.com/<TENANT_ID>/v2.0`.
 
+### Agregar a alguien externo al tenant (por ejemplo, el profesor que evalúa el proyecto)
+
+El paso 4 de arriba asume un usuario que ya existe en tu tenant. Si necesitas darle acceso a alguien con una
+cuenta de **otra organización** (un correo institucional distinto al tuyo, como `@profesor.duoc.cl`), hace
+falta invitarlo primero como usuario invitado — no aparece para asignarle un rol hasta que acepta esa
+invitación:
+
+1. **Microsoft Entra ID → Users → New user → Invite external user.** Completa su correo real; en "Roles"
+   y "Grupos" de este formulario **no toques nada** — esos son roles de directorio de Azure (permisos sobre
+   todo el tenant), no tienen relación con los App roles de esta aplicación. Déjalos vacíos.
+2. Le llega un correo de invitación (de `invitations@microsoft.com`) que tiene que aceptar iniciando sesión
+   con su propia cuenta. Hasta que no lo hace, no podés asignarle nada — confirmá el estado en
+   **Users**, columna **Invitation accepted**.
+3. Una vez aceptada, **Enterprise applications → tu app → Users and groups → Add user/group** y asignale
+   el App role que corresponda (`ADMINISTRADOR`, `MARTILLERO`) — el mismo paso 4 de arriba, ahora que ya
+   figura como usuario del tenant (tipo *Guest*).
+4. Entra normal desde el frontend, con **"Ingresar como martillero / administrador"**, usando su propia
+   cuenta — no hace falta que cambies nada del App registration (el tipo de cuenta sigue siendo "solo tu
+   tenant": un *guest* ya asignado genera un token igual de válido que un usuario nativo).
+
 **Opcional — exponer el teléfono del martillero/administrador en el token** (mismo campo `telefono` que ya
 guarda `ms-usuarios` para los postores vía Cognito):
 
